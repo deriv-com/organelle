@@ -1,0 +1,215 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --radius: 0.625rem;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --canvas: #f5f7fa;
+  --primary: oklch(0.79 0.147 167.8);
+  --primary-foreground: oklch(1 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: var(--primary);
+}
+
+.dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+}
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-canvas: var(--canvas);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+}
+
+button:not(:disabled),
+[role="button"]:not([aria-disabled="true"]) {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+/* Search-focus pulse: brief highlight on the centred card. */
+@keyframes node-pulse-ring {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in oklch, var(--primary) 0%, transparent);
+  }
+  25% {
+    box-shadow: 0 0 0 6px color-mix(in oklch, var(--primary) 45%, transparent);
+  }
+}
+
+.node-pulse {
+  animation: node-pulse-ring 0.8s ease-in-out 3;
+  border-radius: 0.5rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .node-pulse {
+    animation: node-pulse-ring 0.4s ease-in-out 1;
+  }
+}
+
+@keyframes ask-ai-float {
+  0%,
+  100% {
+    box-shadow: 0 10px 28px color-mix(in oklch, var(--foreground) 14%, transparent);
+    transform: translateY(0);
+  }
+  50% {
+    box-shadow: 0 14px 34px color-mix(in oklch, var(--foreground) 20%, transparent);
+    transform: translateY(-3px);
+  }
+}
+
+/* Drag-and-drop indicators. Three layers: card outline, green
+   caret for sibling gaps, cursor chip. */
+.dz-source {
+  opacity: 0.35;
+  cursor: move;
+}
+
+/* Avatars must not start a native HTML drag (that pointercancel-leaks the ghost). */
+[data-node-id] img {
+  -webkit-user-drag: none;
+  pointer-events: none;
+}
+
+.dz-child > div:first-child {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+  border-radius: 0.5rem;
+}
+
+.dz-peer > div:first-child {
+  outline: 2px solid #9333ea;
+  outline-offset: 2px;
+  border-radius: 0.5rem;
+}
+
+.dz-reject > div:first-child {
+  outline: 2px solid #dc2626;
+  outline-offset: 2px;
+  border-radius: 0.5rem;
+}
+
+.dz-caret {
+  position: fixed;
+  width: 3px;
+  margin-left: -1.5px;
+  background: #16a34a;
+  border-radius: 2px;
+  pointer-events: none;
+  z-index: 60;
+}
+
+.dz-ghost {
+  position: fixed;
+  pointer-events: none;
+  opacity: 0.85;
+  transform: scale(0.97);
+  z-index: 70;
+  user-select: none;
+}
+
+.dz-chip {
+  position: fixed;
+  pointer-events: none;
+  user-select: none;
+  z-index: 80;
+  max-width: 320px;
+  padding: 4px 10px;
+  border-radius: 9999px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #fff;
+  background: #0f172a;
+  box-shadow: 0 4px 12px rgb(0 0 0 / 25%);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dz-chip[data-state="reject"] {
+  background: #dc2626;
+}
+
+@keyframes dz-shake-x {
+  0%,
+  100% {
+    transform: translateX(0) scale(0.97);
+  }
+  25% {
+    transform: translateX(-6px) scale(0.97);
+  }
+  75% {
+    transform: translateX(6px) scale(0.97);
+  }
+}
+
+.dz-shake {
+  animation: dz-shake-x 0.3s ease-in-out;
+}
+
+/* Indeterminate bar for long-running global operations. */
+@keyframes operation-indeterminate {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(400%);
+  }
+}

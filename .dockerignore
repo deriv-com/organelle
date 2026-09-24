@@ -1,0 +1,16 @@
+node_modules
+.next
+.git
+.github
+coverage
+*.log
+.env
+.env.*
+!.env.example
+.cursor
+.claude
+.worktrees
+deployment
+*.md
+!THIRD_PARTY_NOTICES.md
+.DS_Store

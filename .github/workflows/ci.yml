@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: organelle_test
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d organelle_test" --health-interval 5s
+          --health-timeout 5s --health-retries 20
+    env:
+      DATABASE_ADMIN_URL: postgresql://postgres:postgres@127.0.0.1:5432/organelle_test
+      DATABASE_APP_USER: organelle_test_app
+      DATABASE_APP_PASSWORD: test-only-password
+      TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/organelle_test
+      AUTH_SECRET: test-only-auth-secret-with-at-least-32-characters
+      APP_BASE_URL: http://localhost:3000
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run format:check
+      - run: npm run lint
+      - run: npm run typecheck
+      - name: Check public references
+        env:
+          PUBLIC_REFERENCE_DENYLIST: ${{ secrets.PUBLIC_REFERENCE_DENYLIST }}
+        run: npm run check:references
+      - run: npm run check:licenses
+      - run: npm audit --omit=dev --audit-level=high
+      - name: Migrate empty PostgreSQL 17 database
+        run: npm run db:migrate
+      - name: Verify migration idempotence and checksums
+        run: npm run db:migrate
+      - name: Verify every unit and database test
+        run: npm test
+      - run: npm run build
+      - run: docker compose config
+      - name: Build application and migration images
+        run: |
+          docker build --target runner --tag organelle:test .
+          docker build --target migrator --tag organelle-migrator:test .
+      - name: Scan application image
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          image-ref: organelle:test
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: 1
+      - name: Compose smoke test
+        env:
+          POSTGRES_PORT: 55432
+          APP_PORT: 3300
+        run: |
+          docker compose up --build --detach --wait
+          curl --fail --retry 10 --retry-delay 2 http://127.0.0.1:3300/api/health
+      - name: Compose logs on failure
+        if: failure()
+        run: docker compose logs --no-color
+      - name: Stop smoke environment
+        if: always()
+        run: docker compose down --volumes

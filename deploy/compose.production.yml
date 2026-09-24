@@ -1,0 +1,70 @@
+name: organelle
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: organelle
+      POSTGRES_USER: organelle_admin
+      POSTGRES_PASSWORD: ${DATABASE_ADMIN_PASSWORD:?required}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U organelle_admin -d organelle"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  migrate:
+    image: ${ORGANELLE_IMAGE:?Set ORGANELLE_IMAGE to a versioned GHCR image}
+    entrypoint: ["npm", "run", "db:migrate"]
+    environment:
+      DATABASE_ADMIN_URL: postgresql://organelle_admin:${DATABASE_ADMIN_PASSWORD}@db:5432/organelle
+      DATABASE_APP_USER: organelle_app
+      DATABASE_APP_PASSWORD: ${DATABASE_APP_PASSWORD:?required}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  app:
+    image: ${ORGANELLE_IMAGE}
+    restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp]
+    environment:
+      DATABASE_URL: postgresql://organelle_app:${DATABASE_APP_PASSWORD}@db:5432/organelle
+      APP_BASE_URL: https://${APP_HOSTNAME:?required}
+      NEXTAUTH_URL: https://${APP_HOSTNAME}
+      AUTH_SECRET: ${AUTH_SECRET:?required}
+      OIDC_ISSUER: ${OIDC_ISSUER:?required}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:?required}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:?required}
+      OIDC_PROVIDER_NAME: ${OIDC_PROVIDER_NAME:-OpenID Connect}
+      ALLOWED_EMAIL_DOMAINS: ${ALLOWED_EMAIL_DOMAINS:-}
+      ORG_NAME: ${ORG_NAME:-Organelle}
+      ORG_TIMEZONE: ${ORG_TIMEZONE:-UTC}
+      APP_LOG_FORMAT: json
+      APP_LOG_LEVEL: ${APP_LOG_LEVEL:-INFO}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["https"]
+    restart: unless-stopped
+    environment:
+      APP_HOSTNAME: ${APP_HOSTNAME}
+    ports: ["80:80", "443:443", "443:443/udp"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [app]
+
+volumes:
+  postgres_data:
+  caddy_data:
+  caddy_config:

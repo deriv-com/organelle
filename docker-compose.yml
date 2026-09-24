@@ -1,0 +1,64 @@
+name: organelle
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: organelle
+      POSTGRES_USER: organelle_admin
+      POSTGRES_PASSWORD: ${DATABASE_ADMIN_PASSWORD:-organelle_admin_local}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U organelle_admin -d organelle"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  migrate:
+    build:
+      context: .
+      target: migrator
+    environment:
+      DATABASE_ADMIN_URL: postgresql://organelle_admin:${DATABASE_ADMIN_PASSWORD:-organelle_admin_local}@db:5432/organelle
+      DATABASE_APP_USER: organelle_app
+      DATABASE_APP_PASSWORD: ${DATABASE_APP_PASSWORD:-organelle_app_local}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  app:
+    build:
+      context: .
+      target: runner
+    image: organelle:local
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    ports:
+      - "${APP_BIND_ADDRESS:-127.0.0.1}:${APP_PORT:-3000}:3000"
+    environment:
+      DATABASE_URL: postgresql://organelle_app:${DATABASE_APP_PASSWORD:-organelle_app_local}@db:5432/organelle
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3000}
+      NEXTAUTH_URL: ${APP_BASE_URL:-http://localhost:3000}
+      AUTH_SECRET: ${AUTH_SECRET:?Set AUTH_SECRET to at least 32 random characters}
+      OIDC_ISSUER: ${OIDC_ISSUER:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+      OIDC_PROVIDER_NAME: ${OIDC_PROVIDER_NAME:-OpenID Connect}
+      ALLOWED_EMAIL_DOMAINS: ${ALLOWED_EMAIL_DOMAINS:-}
+      ORG_NAME: ${ORG_NAME:-Organelle}
+      ORG_TIMEZONE: ${ORG_TIMEZONE:-UTC}
+      APP_LOG_FORMAT: ${APP_LOG_FORMAT:-json}
+      APP_LOG_LEVEL: ${APP_LOG_LEVEL:-INFO}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  postgres_data:
