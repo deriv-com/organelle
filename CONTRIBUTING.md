@@ -5,7 +5,7 @@ schema, security, or API changes so the design can be agreed before implementati
 
 ## Development workflow
 
-1. Use Node.js 24 and PostgreSQL 17.
+1. Use the Node.js version pinned in `.nvmrc` and PostgreSQL 17.
 2. Run `npm ci`, copy `.env.example` to `.env`, and start the database with
    `docker compose up -d db`.
 3. Run `npm run db:migrate`, then `npm run db:seed:demo` for synthetic data.

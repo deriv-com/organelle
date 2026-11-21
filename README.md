@@ -124,7 +124,8 @@ available from **More** when the signed-in user has access.
 
 ## Quick start with synthetic data
 
-Requirements: Docker with Compose v2 and Node.js 24 when running CLI commands locally.
+Use Docker with Compose v2. For local CLI commands, use the Node.js version pinned in
+`.nvmrc`.
 
 If port `5432` is already used by another PostgreSQL instance, choose a free
 `POSTGRES_PORT` in `.env` and use that same port in `DATABASE_ADMIN_URL` and

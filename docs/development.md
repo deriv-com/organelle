@@ -1,7 +1,7 @@
 # Development
 
-Use Node.js 24, npm, Docker Compose v2, and PostgreSQL 17. Copy `.env.example` to
-`.env`, choose local-only secrets, then run:
+Use the Node.js version in `.nvmrc` (`nvm install`), npm, Docker Compose v2, and
+PostgreSQL 17. Copy `.env.example` to `.env`, choose local-only secrets, then run:
 
 ```bash
 npm ci
