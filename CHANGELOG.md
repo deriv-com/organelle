@@ -5,6 +5,9 @@ All notable changes are documented here. The project follows Semantic Versioning
 
 ## Unreleased
 
+- Refresh the pinned Node.js 24 runtime and remove unused bundled package managers from
+  the application image.
+
 - Preserve primary-seat choices and surface concurrent primary-seat conflicts during
   merge review; synchronize replaced occupants and explicitly restore deleted parents.
 - Restrict undo and redo to the current user’s top command, recheck publishing roles
