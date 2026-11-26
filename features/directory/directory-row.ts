@@ -93,7 +93,9 @@ export function buildDirectoryRows(rows: ChartRow[]): DirectoryRow[] {
         headerNames.unshift(parent.name ?? "");
         headerPathIds.unshift(parent.id);
       } else if (manager === "" && parent.members.length > 0) {
-        manager = parent.members[0]!.displayName;
+        manager =
+          parent.members.find((member) => member.authId === host.primaryManagerAuthId)
+            ?.displayName ?? parent.members[0]!.displayName;
       }
       cursor = parent.parentId;
     }

@@ -17,7 +17,7 @@ const {
 const ATTACHED = Symbol.for("organelle.logging.request_logger_attached");
 const CONSOLE_CAPTURED = Symbol.for("organelle.logging.console_captured");
 
-const recentRequestErrorDigests = new Map();
+const requestErrorDigests = new WeakMap();
 const requestLogContext = new AsyncLocalStorage();
 let stderrLineBuffer = "";
 const STDERR_LINE_BUFFER_MAX = 64 * 1024;
@@ -91,24 +91,23 @@ function sanitizedTextArgs(args) {
 }
 
 function noteRequestErrorLogged(digest) {
-  if (typeof digest !== "string" || !digest) return;
-  recentRequestErrorDigests.set(digest, Date.now());
-  pruneRecentRequestErrorDigests();
-}
-
-function pruneRecentRequestErrorDigests() {
-  const cutoff = Date.now() - 1000;
-  for (const [digest, loggedAt] of recentRequestErrorDigests.entries()) {
-    if (loggedAt < cutoff) recentRequestErrorDigests.delete(digest);
+  const context = requestLogContext.getStore();
+  if (!context || typeof digest !== "string" || !digest) return;
+  let digests = requestErrorDigests.get(context);
+  if (!digests) {
+    digests = new Set();
+    requestErrorDigests.set(context, digests);
   }
+  digests.add(digest);
 }
 
 function shouldSuppressCapturedError(error) {
   if (!(error instanceof Error)) return false;
-  const digest = typeof error.digest === "string" ? error.digest : "";
-  if (!digest) return false;
-  pruneRecentRequestErrorDigests();
-  return recentRequestErrorDigests.has(digest);
+  return (
+    typeof error.digest === "string" &&
+    Boolean(error.digest) &&
+    requestErrorDigests.get(requestLogContext.getStore())?.has(error.digest) === true
+  );
 }
 
 function safeStringify(value) {
@@ -142,10 +141,14 @@ function captureConsoleArgs(args, level, logger) {
     }
   } else {
     const stringParts = args
-      .filter((arg) => typeof arg === "string")
+      .filter(
+        (arg) =>
+          typeof arg === "string" &&
+          !(firstError && util.stripVTControlCharacters(arg).trim() === "⨯"),
+      )
       .map((arg) => arg.trim())
       .filter(Boolean);
-    message = stringParts.join(" ") || safeStringify(args[0]);
+    message = stringParts.join(" ") || safeStringify(firstError ?? args[0]);
   }
 
   return {

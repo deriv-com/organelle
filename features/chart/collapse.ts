@@ -204,7 +204,7 @@ export function collapseNextLevel(
   nodeId: string,
 ): void {
   eachDescendant(index, nodeId, (row) => {
-    if (!row.isAssistant) row._expanded = false;
+    row._expanded = false;
   });
 }
 
@@ -214,7 +214,7 @@ export function collapseAllDescendants(
   nodeId: string,
 ): void {
   eachDescendant(index, nodeId, (row) => {
-    if (!row.isAssistant) row._expanded = false;
+    row._expanded = false;
   });
 }
 

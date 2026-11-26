@@ -1,28 +1,8 @@
-import { readFile, readdir } from "node:fs/promises";
-import { extname, join, relative } from "node:path";
+import { execFileSync } from "node:child_process";
+import { readFile, lstat } from "node:fs/promises";
+import { join } from "node:path";
 
 const root = process.cwd();
-const ignoredDirectories = new Set([".git", ".next", "node_modules", "coverage"]);
-const ignoredFiles = new Set(["public/icon.png"]);
-const textExtensions = new Set([
-  "",
-  ".cjs",
-  ".css",
-  ".csv",
-  ".dockerignore",
-  ".example",
-  ".gitignore",
-  ".js",
-  ".json",
-  ".md",
-  ".mjs",
-  ".sql",
-  ".ts",
-  ".tsx",
-  ".txt",
-  ".yml",
-  ".yaml",
-]);
 
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -36,37 +16,59 @@ const privatePatterns = (process.env.PUBLIC_REFERENCE_DENYLIST ?? "")
   .filter(Boolean)
   .map((value) => new RegExp(escapeRegex(value).split(/\s+/).join("\\s+"), "i"));
 
-async function filesUnder(directory: string): Promise<string[]> {
-  const entries = await readdir(directory, { withFileTypes: true });
-  const files: string[] = [];
-  for (const entry of entries) {
-    if (entry.isDirectory() && ignoredDirectories.has(entry.name)) continue;
-    const path = join(directory, entry.name);
-    if (entry.isDirectory()) files.push(...(await filesUnder(path)));
-    else if (entry.isFile()) files.push(path);
-  }
-  return files;
-}
-
-const findings: string[] = [];
-for (const path of await filesUnder(root)) {
-  const name = relative(root, path);
-  if (ignoredFiles.has(name) || !textExtensions.has(extname(path))) continue;
-  const contents = await readFile(path, "utf8");
-  for (const pattern of privatePatterns) {
-    if (pattern.test(contents)) {
-      findings.push(`${name}: configured private reference`);
-    }
-  }
+const findings = new Set<string>();
+const containsPrivate = (value: string) =>
+  privatePatterns.some((pattern) => pattern.test(value));
+const safeName = (name: string) => (containsPrivate(name) ? "[redacted path]" : name);
+function inspect(name: string, contents: string) {
+  const label = safeName(name);
+  if (containsPrivate(name)) findings.add(`${label}: configured private path`);
+  if (containsPrivate(contents)) findings.add(`${label}: configured private reference`);
   if (/\barn:[a-z][a-z0-9-]*:/i.test(contents))
-    findings.push(`${name}: cloud account ARN`);
-  if (/https?:\/\/[^\s"')]*\.(?:internal|corp)(?:[/:]|$)/i.test(contents)) {
-    findings.push(`${name}: private hostname`);
-  }
+    findings.add(`${label}: cloud account ARN`);
+  if (/https?:\/\/[^\s"')]*\.(?:internal|corp)(?:[/:]|$)/i.test(contents))
+    findings.add(`${label}: private hostname`);
 }
-
-if (findings.length) {
-  console.error(findings.join("\n"));
+const git = (args: string[]) =>
+  execFileSync("git", args, { cwd: root, maxBuffer: 64 * 1024 * 1024 });
+// Index blobs remain publication candidates even after unstaged edits or deletion.
+const staged = git(["ls-files", "--stage", "-z"])
+  .toString("utf8")
+  .split("\0")
+  .filter(Boolean);
+for (const entry of staged) {
+  const tab = entry.indexOf("\t");
+  const [mode, oid, stage] = entry.slice(0, tab).split(" ");
+  const name = entry.slice(tab + 1);
+  if (stage !== "0" || mode === "160000") {
+    findings.add(`${safeName(name)}: unresolved index entry requires review`);
+    continue;
+  }
+  if (mode === "120000")
+    findings.add(`${safeName(name)}: symbolic link requires review`);
+  inspect(name, git(["cat-file", "blob", oid]).toString("utf8"));
+}
+// No extension allowlist: custom configuration and binary content are inspected too.
+const files = git(["ls-files", "-z", "--cached", "--others", "--exclude-standard"])
+  .toString("utf8")
+  .split("\0")
+  .filter(Boolean);
+for (const name of new Set(files)) {
+  inspect(name, "");
+  const path = join(root, name);
+  const metadata = await lstat(path).catch((error) => {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  });
+  if (!metadata) continue;
+  if (metadata.isSymbolicLink()) {
+    findings.add(`${safeName(name)}: symbolic link requires review`);
+    continue;
+  }
+  if (metadata.isFile()) inspect(name, (await readFile(path)).toString("utf8"));
+}
+if (findings.size) {
+  console.error([...findings].join("\n"));
   process.exitCode = 1;
 } else {
   console.log("Public reference check passed");

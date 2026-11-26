@@ -92,6 +92,55 @@ function empIndex(node: MergeNode | undefined): Map<string, MergeAssignment> {
   return map;
 }
 
+function primarySeatIndex(tree: Map<string, MergeNode>): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const node of tree.values()) {
+    for (const assignment of node.assignments) {
+      if (assignment.isPrimary) out.set(assignment.employeeAuthId, node.id);
+    }
+  }
+  return out;
+}
+
+function assignmentForEmployee(
+  tree: Map<string, MergeNode>,
+  nodeId: string | undefined,
+  employeeAuthId: string,
+): MergeAssignment | undefined {
+  if (!nodeId) return undefined;
+  return tree
+    .get(nodeId)
+    ?.assignments.find((member) => member.employeeAuthId === employeeAuthId);
+}
+
+function primaryEmployeeIds(...indexes: Map<string, string>[]): Set<string> {
+  const out = new Set<string>();
+  for (const index of indexes) {
+    for (const employeeAuthId of index.keys()) out.add(employeeAuthId);
+  }
+  return out;
+}
+
+function employeeLabel(
+  employeeAuthId: string,
+  ...trees: Map<string, MergeNode>[]
+): string {
+  for (const tree of trees) {
+    for (const node of tree.values()) {
+      const assignment = node.assignments.find(
+        (member) => member.employeeAuthId === employeeAuthId,
+      );
+      if (assignment) return assignment.displayName || "Employee";
+    }
+  }
+  return "Employee";
+}
+
+function primarySeatLabel(tree: Map<string, MergeNode>, nodeId: string): string {
+  const node = tree.get(nodeId);
+  return node?.jobTitle ?? node?.name ?? "seat";
+}
+
 const MISSING_SIDE: ConflictSide = { exists: false, parentLabel: null, title: null };
 
 function sideOf(
@@ -167,6 +216,7 @@ const EMPLOYEE_REVIEW_FIELDS: Array<{
   { field: "employmentRecord", label: "Employment record" },
   { field: "displayTitle", label: "Person job title" },
   { field: "positionLevel", label: "Position level" },
+  { field: "primaryManagerAuthId", label: "Reporting manager" },
   { field: "legalFullName", label: "Legal full name" },
   { field: "joiningDate", label: "Joining date" },
   { field: "hiredAt", label: "Hired date" },
@@ -209,6 +259,7 @@ export function runMerge(input: MergeInput): MergeResult {
   detectConflicts(base, live, sandbox, input, conflicts);
   if (target === "published") {
     collectAutoChanges(base, live, sandbox, changes);
+    collectPrimaryChanges(base, live, sandbox, changes, "sandbox");
     collectOverrideChanges(
       input.baseOverrides,
       input.liveOverrides,
@@ -219,6 +270,7 @@ export function runMerge(input: MergeInput): MergeResult {
     );
   } else {
     collectLiveChanges(base, live, sandbox, changes);
+    collectPrimaryChanges(base, live, sandbox, changes, "live");
     collectOverrideChanges(
       input.baseOverrides,
       input.liveOverrides,
@@ -231,6 +283,7 @@ export function runMerge(input: MergeInput): MergeResult {
 
   const unresolved = conflicts.filter((c) => !isResolved(c, resolutions));
   const merged = applyMerge(base, live, sandbox, input, conflicts, target);
+  applyPrimarySeatChanges(merged, base, live, sandbox, input, conflicts, target);
   applyOverrideAssignments(merged, input, conflicts, resolutions, target);
   keepOneAssistant(merged, sandbox);
 
@@ -342,18 +395,35 @@ function detectConflicts(
         },
         allowed: ALLOWED.stale_target,
       });
-    } else if (sandboxMoved && liveMoved && s.parentId !== l.parentId) {
-      conflicts.push({
-        key: `concurrent_move:${id}:parent`,
-        kind: "concurrent_move",
-        nodeId: id,
-        field: "parent",
-        label: nodeLabel(s),
-        sentence: `${nodeLabel(s)} — Live chart and Sandbox disagree on the parent.`,
-        live: sideOf(l, live),
-        sandbox: sideOf(s, sandbox),
-        allowed: ALLOWED.concurrent_move,
-      });
+    } else {
+      const restoreParent =
+        input.target === "sandbox" &&
+        liveMoved &&
+        live.get(l.parentId)?.kind === "header" &&
+        base.has(l.parentId) &&
+        !sandbox.has(l.parentId)
+          ? live.get(l.parentId)
+          : undefined;
+      if (restoreParent || (sandboxMoved && liveMoved && s.parentId !== l.parentId)) {
+        conflicts.push({
+          key: restoreParent
+            ? `concurrent_move:${id}:parent:restore:${restoreParent.id}`
+            : `concurrent_move:${id}:parent`,
+          kind: "concurrent_move",
+          nodeId: id,
+          field: "parent",
+          label: nodeLabel(s),
+          sentence: restoreParent
+            ? `${nodeLabel(s)} — Live chart moved this under ${nodeLabel(restoreParent)}, which the sandbox deleted. Choose Live chart to restore that header or Sandbox to keep the sandbox parent.`
+            : `${nodeLabel(s)} — Live chart and Sandbox disagree on the parent.`,
+          live: sideOf(l, live),
+          sandbox: sideOf(s, sandbox),
+          allowed: ALLOWED.concurrent_move,
+          ...(restoreParent
+            ? { relatedId: restoreParent.id, restoreLiveParentId: restoreParent.id }
+            : {}),
+        });
+      }
     }
 
     if (
@@ -396,6 +466,63 @@ function detectConflicts(
     }
   }
 
+  const basePrimary = primarySeatIndex(base);
+  const livePrimary = primarySeatIndex(live);
+  const sandboxPrimary = primarySeatIndex(sandbox);
+  for (const employeeAuthId of primaryEmployeeIds(
+    basePrimary,
+    livePrimary,
+    sandboxPrimary,
+  )) {
+    const before = basePrimary.get(employeeAuthId);
+    const liveNodeId = livePrimary.get(employeeAuthId);
+    const sandboxNodeId = sandboxPrimary.get(employeeAuthId);
+    const liveChanged = liveNodeId !== before;
+    const sandboxChanged = sandboxNodeId !== before;
+    const bothChangedDifferentPrimaries =
+      liveChanged &&
+      sandboxChanged &&
+      liveNodeId !== sandboxNodeId &&
+      Boolean(liveNodeId || sandboxNodeId);
+    const sandboxRemovedLivePrimaryDestination =
+      liveChanged &&
+      Boolean(liveNodeId) &&
+      Boolean(sandboxNodeId) &&
+      liveNodeId !== sandboxNodeId &&
+      Boolean(assignmentForEmployee(base, liveNodeId, employeeAuthId)) &&
+      !assignmentForEmployee(sandbox, liveNodeId, employeeAuthId);
+    const liveRemovedSandboxPrimaryDestination =
+      sandboxChanged &&
+      Boolean(liveNodeId) &&
+      Boolean(sandboxNodeId) &&
+      liveNodeId !== sandboxNodeId &&
+      Boolean(assignmentForEmployee(base, sandboxNodeId, employeeAuthId)) &&
+      !assignmentForEmployee(live, sandboxNodeId, employeeAuthId);
+    if (
+      !bothChangedDifferentPrimaries &&
+      !sandboxRemovedLivePrimaryDestination &&
+      !liveRemovedSandboxPrimaryDestination
+    ) {
+      continue;
+    }
+    const conflictNodeId = sandboxNodeId ?? liveNodeId ?? before;
+    if (!conflictNodeId) continue;
+    const label = employeeLabel(employeeAuthId, sandbox, live, base);
+    conflicts.push({
+      key: `concurrent_edit:${employeeAuthId}:primary_seat`,
+      kind: "concurrent_edit",
+      nodeId: conflictNodeId,
+      field: "primary_seat",
+      label,
+      sentence: `${label} — Live chart and Sandbox disagree on the primary seat.`,
+      live: liveNodeId ? sideOf(live.get(liveNodeId), live) : MISSING_SIDE,
+      sandbox: sandboxNodeId
+        ? sideOf(sandbox.get(sandboxNodeId), sandbox)
+        : MISSING_SIDE,
+      allowed: ALLOWED.concurrent_edit,
+    });
+  }
+
   for (const authId of overrideKeys(
     input.baseOverrides,
     input.liveOverrides,
@@ -426,6 +553,43 @@ function detectConflicts(
         allowed: ALLOWED.concurrent_edit,
       });
     }
+  }
+}
+
+function collectPrimaryChanges(
+  base: Map<string, MergeNode>,
+  live: Map<string, MergeNode>,
+  sandbox: Map<string, MergeNode>,
+  changes: AutoChange[],
+  source: "sandbox" | "live",
+): void {
+  const basePrimary = primarySeatIndex(base);
+  const livePrimary = primarySeatIndex(live);
+  const sandboxPrimary = primarySeatIndex(sandbox);
+  for (const employeeAuthId of primaryEmployeeIds(
+    basePrimary,
+    livePrimary,
+    sandboxPrimary,
+  )) {
+    const before = basePrimary.get(employeeAuthId);
+    const sourceNodeId =
+      source === "sandbox"
+        ? sandboxPrimary.get(employeeAuthId)
+        : livePrimary.get(employeeAuthId);
+    const otherNodeId =
+      source === "sandbox"
+        ? livePrimary.get(employeeAuthId)
+        : sandboxPrimary.get(employeeAuthId);
+    if (!before || !sourceNodeId || sourceNodeId === before || otherNodeId !== before)
+      continue;
+    const sourceTree = source === "sandbox" ? sandbox : live;
+    const label = employeeLabel(employeeAuthId, sourceTree, live, sandbox, base);
+    changes.push({
+      key: `primary:${employeeAuthId}`,
+      nodeId: sourceNodeId,
+      kind: "edit",
+      summary: `Set ${label}'s primary seat to ${primarySeatLabel(sourceTree, sourceNodeId)}`,
+    });
   }
 }
 
@@ -754,9 +918,136 @@ function applyMerge(
     }
   }
 
+  if (!toPublished) {
+    for (const conflict of conflicts) {
+      const parentId = conflict.restoreLiveParentId;
+      if (
+        !parentId ||
+        choice(conflict.key, res)?.choice !== "use_live" ||
+        out.has(parentId)
+      )
+        continue;
+      const parent = live.get(parentId);
+      if (parent) out.set(parentId, cloneNode(parent));
+    }
+  }
+
   applyComboDrops(out, toPublished ? live : sandbox, input.resolutions ?? {});
 
   return [...out.values()];
+}
+
+function applyPrimarySeatChanges(
+  merged: MergeNode[],
+  base: Map<string, MergeNode>,
+  live: Map<string, MergeNode>,
+  sandbox: Map<string, MergeNode>,
+  input: MergeInput,
+  conflicts: Conflict[],
+  target: MergeTarget,
+): void {
+  const basePrimary = primarySeatIndex(base);
+  const livePrimary = primarySeatIndex(live);
+  const sandboxPrimary = primarySeatIndex(sandbox);
+  const mergedAssignments = new Map<
+    string,
+    Array<{ node: MergeNode; member: MergeAssignment }>
+  >();
+  for (const node of merged) {
+    for (const member of node.assignments) {
+      const assignments = mergedAssignments.get(member.employeeAuthId) ?? [];
+      assignments.push({ node, member });
+      mergedAssignments.set(member.employeeAuthId, assignments);
+    }
+  }
+  for (const employeeAuthId of primaryEmployeeIds(
+    basePrimary,
+    livePrimary,
+    sandboxPrimary,
+  )) {
+    const before = basePrimary.get(employeeAuthId);
+    const liveNodeId = livePrimary.get(employeeAuthId);
+    const sandboxNodeId = sandboxPrimary.get(employeeAuthId);
+    const conflict = conflicts.find(
+      (item) =>
+        item.field === "primary_seat" &&
+        item.key === `concurrent_edit:${employeeAuthId}:primary_seat`,
+    );
+    const resolution = conflict ? choice(conflict.key, input.resolutions) : undefined;
+    let desiredNodeId: string | undefined;
+
+    if (conflict) {
+      if (resolution?.choice === "use_live") desiredNodeId = liveNodeId;
+      else if (resolution?.choice === "use_sandbox") desiredNodeId = sandboxNodeId;
+      else if (resolution?.choice === "drop") {
+        desiredNodeId = target === "published" ? liveNodeId : sandboxNodeId;
+      } else {
+        desiredNodeId = sandboxNodeId;
+      }
+    } else if (target === "published") {
+      const sandboxChanged = sandboxNodeId !== before;
+      const liveChanged = liveNodeId !== before;
+      desiredNodeId =
+        sandboxChanged &&
+        (!liveChanged || sandboxNodeId === liveNodeId) &&
+        included(`primary:${employeeAuthId}`, input.includedKeys)
+          ? sandboxNodeId
+          : liveNodeId;
+    } else {
+      desiredNodeId =
+        liveNodeId !== before && sandboxNodeId === before ? liveNodeId : sandboxNodeId;
+    }
+
+    if (conflict && !desiredNodeId) {
+      for (const node of merged) {
+        node.assignments = node.assignments.filter(
+          (member) => member.employeeAuthId !== employeeAuthId,
+        );
+      }
+      mergedAssignments.delete(employeeAuthId);
+      continue;
+    }
+
+    const assignments = mergedAssignments.get(employeeAuthId) ?? [];
+    if (
+      conflict &&
+      desiredNodeId &&
+      !assignments.some(({ node }) => node.id === desiredNodeId)
+    ) {
+      const sourceTree =
+        desiredNodeId === liveNodeId
+          ? live
+          : desiredNodeId === sandboxNodeId
+            ? sandbox
+            : undefined;
+      const sourceAssignment = sourceTree
+        ? assignmentForEmployee(sourceTree, desiredNodeId, employeeAuthId)
+        : undefined;
+      let mergedNode = merged.find((node) => node.id === desiredNodeId);
+      if (!mergedNode && sourceTree?.get(desiredNodeId)) {
+        mergedNode = cloneNode(sourceTree.get(desiredNodeId)!);
+        mergedNode.assignments = [];
+        merged.push(mergedNode);
+      }
+      if (sourceAssignment && mergedNode) {
+        const member = {
+          ...sourceAssignment,
+          isHost: !mergedNode.assignments.some((assignment) => assignment.isHost),
+        };
+        mergedNode.assignments.push(member);
+        assignments.push({ node: mergedNode, member });
+        mergedAssignments.set(employeeAuthId, assignments);
+      }
+    }
+    if (assignments.length === 0) continue;
+    const selected =
+      assignments.find(({ node }) => node.id === desiredNodeId) ??
+      assignments.find(({ member }) => member.isPrimary) ??
+      assignments[0]!;
+    for (const assignment of assignments) {
+      assignment.member.isPrimary = assignment === selected;
+    }
+  }
 }
 
 function applyComboDrops(
@@ -765,12 +1056,15 @@ function applyComboDrops(
   resolutions: Record<string, Resolution>,
 ): void {
   for (const [key, resolution] of Object.entries(resolutions)) {
-    if (resolution.choice !== "drop" || !key.startsWith("combo_")) continue;
+    if (!key.startsWith("combo_")) continue;
     const nodeId = key.split(":").pop();
     if (!nodeId) continue;
     const node = out.get(nodeId);
     const liveNode = live.get(nodeId);
-    if (node && liveNode) node.parentId = liveNode.parentId;
+    if (node && resolution.choice === "pick_new_target")
+      node.parentId = resolution.newParentId;
+    else if (node && liveNode && resolution.choice === "drop")
+      node.parentId = liveNode.parentId;
   }
 }
 
@@ -1051,13 +1345,30 @@ function mergeAssignments(
     if (toPublished) {
       if (was && !sb && included(`unassign:${id}:${empId}`, keys)) keep = false;
       if (!was && sb && !included(`assign:${id}:${empId}`, keys)) keep = lv;
-    } else {
-      if (was && !lv && sb) keep = true;
-      if (!was && lv && !sb) keep = true;
+    } else if (was && !sb) {
+      keep = false;
+    } else if (!lv) {
+      const prior = bEmp.get(empId);
+      const proposed = sEmp.get(empId);
+      if (
+        prior &&
+        proposed &&
+        prior.isHost === proposed.isHost &&
+        Boolean(prior.isPrimary) === Boolean(proposed.isPrimary)
+      )
+        keep = false;
     }
 
     if (!keep) continue;
-    const src = (lv ? lEmp.get(empId) : sEmp.get(empId))!;
+    const src = (
+      toPublished
+        ? lv
+          ? lEmp.get(empId)
+          : sEmp.get(empId)
+        : sb
+          ? sEmp.get(empId)
+          : lEmp.get(empId)
+    )!;
     const assignment = { ...src };
     if (
       sb &&
@@ -1201,6 +1512,20 @@ function logsFromBeforeToMerged(
       }
     }
   }
+  const beforePrimary = primarySeatIndex(before);
+  const nextPrimary = primarySeatIndex(next);
+  for (const employeeAuthId of primaryEmployeeIds(beforePrimary, nextPrimary)) {
+    const previousNodeId = beforePrimary.get(employeeAuthId);
+    const nextNodeId = nextPrimary.get(employeeAuthId);
+    if (!previousNodeId || !nextNodeId || previousNodeId === nextNodeId) continue;
+    logs.push({
+      op: "set_primary_seat",
+      nodeId: nextNodeId,
+      employeeAuthId,
+      before: { node_id: previousNodeId },
+      after: { node_id: nextNodeId },
+    });
+  }
   return logs;
 }
 
@@ -1208,7 +1533,12 @@ function countLogs(logs: MergeLog[]): MergeCounts {
   const counts: MergeCounts = { moves: 0, edits: 0, creates: 0, deletes: 0, peers: 0 };
   for (const log of logs) {
     if (log.op === "move_node") counts.moves += 1;
-    else if (log.op === "rename_header" || log.op === "reorder_node") counts.edits += 1;
+    else if (
+      log.op === "rename_header" ||
+      log.op === "reorder_node" ||
+      log.op === "set_primary_seat"
+    )
+      counts.edits += 1;
     else if (log.op === "create_header" || log.op === "create_seat")
       counts.creates += 1;
     else if (log.op === "delete_header" || log.op === "delete_seat")
@@ -1328,6 +1658,22 @@ function computeTints(
     else if (l && !m) removed.push(id);
     else if (l && m && l.parentId !== m.parentId) moved.push(id);
     else if (l && m && nodeEdited(l, m)) edited.push(id);
+  }
+  const livePrimary = primarySeatIndex(live);
+  const nextPrimary = primarySeatIndex(next);
+  for (const employeeAuthId of primaryEmployeeIds(livePrimary, nextPrimary)) {
+    const beforeNodeId = livePrimary.get(employeeAuthId);
+    const nextNodeId = nextPrimary.get(employeeAuthId);
+    if (
+      !nextNodeId ||
+      nextNodeId === beforeNodeId ||
+      added.includes(nextNodeId) ||
+      moved.includes(nextNodeId) ||
+      edited.includes(nextNodeId)
+    ) {
+      continue;
+    }
+    edited.push(nextNodeId);
   }
   return { added, removed, moved, edited };
 }

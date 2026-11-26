@@ -55,7 +55,7 @@ import {
 import { applyStagedEmployeeEdits } from "@/features/sandbox/staged-employees";
 import { withDbRetry } from "@/lib/db";
 import { runMerge } from "./engine";
-import { commitMerge, previewMerge, previewSync } from "./actions";
+import { commitMerge, commitSync, previewMerge, previewSync } from "./actions";
 import { toQueryRows } from "./tree";
 import type { MergeNode, MergeResult } from "./types";
 
@@ -334,9 +334,10 @@ describe("previewMerge", () => {
 describe("previewSync", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    getSandboxAccess.mockResolvedValue({ canEdit: false });
   });
 
-  it("denies non-owners", async () => {
+  it("denies actors without edit access", async () => {
     requireRole.mockResolvedValueOnce({
       ok: true,
       actor: { authId: "other", role: "editor", email: "e@example.com" },
@@ -353,11 +354,86 @@ describe("previewSync", () => {
       rows: [],
     });
     expect(await previewSync(SANDBOX_ID)).toEqual({
-      error: "Only the sandbox owner can do this",
+      error: "Not allowed",
     });
   });
 
+  it("allows an explicitly shared editor to preview synchronization", async () => {
+    arrangeCommit();
+    getSandboxAccess.mockResolvedValue({ canEdit: true, canManageLifecycle: false });
+    expect(await previewSync(SANDBOX_ID)).toMatchObject({
+      sandboxTreeId: SANDBOX_ID,
+      canRefork: false,
+    });
+  });
+  it("rechecks edit access before writing a synchronization", async () => {
+    arrangeCommit();
+    getSandboxAccess.mockResolvedValue({ canEdit: true, canManageLifecycle: false });
+    sandboxAccessWithSql.mockResolvedValue({ canEdit: false });
+    const queries: string[] = [];
+    const tx = Object.assign(
+      vi.fn(async (strings: TemplateStringsArray) => {
+        const query = strings.join("?");
+        queries.push(query);
+        if (query.includes("select forked_from_seq"))
+          return [{ forked_from_seq: 1, archived_at: null }];
+        if (query.includes("app_roles")) return [{ role: "editor" }];
+        if (query.includes("insert into organelle.sandbox_syncs"))
+          return [{ sync_id: "example" }];
+        if (query.includes("apply_sync_to_sandbox"))
+          return [{ apply_sync_to_sandbox: SANDBOX_ID }];
+        return [];
+      }),
+      { json: (v: unknown) => v },
+    );
+    vi.mocked(withDbRetry).mockImplementationOnce(async (run) =>
+      run({
+        begin: async (runTx: (transaction: typeof tx) => unknown) => runTx(tx),
+      } as never),
+    );
+    expect(
+      await commitSync({ sandboxTreeId: SANDBOX_ID, resolutions: {}, cachedAtSeq: 2 }),
+    ).toMatchObject({ ok: false });
+    expect(queries.some((q) => q.includes("insert into organelle.sandbox_syncs"))).toBe(
+      false,
+    );
+  });
+  it("rejects synchronization when a collaborator adds a node after the snapshot", async () => {
+    arrangeCommit();
+    getSandboxAccess.mockResolvedValue({ canEdit: true, canManageLifecycle: false });
+    sandboxAccessWithSql.mockResolvedValue({ canEdit: true });
+    const queries: string[] = [];
+    const tx = Object.assign(
+      vi.fn(async (strings: TemplateStringsArray) => {
+        const query = strings.join("?");
+        queries.push(query);
+        if (query.includes("select forked_from_seq"))
+          return [{ forked_from_seq: 1, archived_at: null }];
+        if (query.includes("from organelle.nodes"))
+          return [{ node_id: "new-node", row_version: 1 }];
+        if (query.includes("app_roles")) return [{ role: "editor" }];
+        if (query.includes("insert into organelle.sandbox_syncs"))
+          return [{ sync_id: "example" }];
+        if (query.includes("apply_sync_to_sandbox"))
+          return [{ apply_sync_to_sandbox: SANDBOX_ID }];
+        return [];
+      }),
+      { json: (v: unknown) => v },
+    );
+    vi.mocked(withDbRetry).mockImplementationOnce(async (run) =>
+      run({
+        begin: async (runTx: (transaction: typeof tx) => unknown) => runTx(tx),
+      } as never),
+    );
+    expect(
+      await commitSync({ sandboxTreeId: SANDBOX_ID, resolutions: {}, cachedAtSeq: 2 }),
+    ).toMatchObject({ ok: false });
+    expect(queries.some((q) => q.includes("insert into organelle.sandbox_syncs"))).toBe(
+      false,
+    );
+  });
   it("rejects when sandbox is already current with live", async () => {
+    getSandboxAccess.mockResolvedValue({ canEdit: true, canManageLifecycle: true });
     requireRole.mockResolvedValueOnce({
       ok: true,
       actor: { authId: "editor-1", role: "editor", email: "e@example.com" },
@@ -500,4 +576,66 @@ describe("commitMerge change reason boundary", () => {
       [NEW_HIRE_SEAT_ID]: null,
     });
   });
+  it.each([
+    { label: "revoked", currentRoles: [] },
+    { label: "demoted to editor", currentRoles: [{ role: "editor" }] },
+  ])(
+    "rejects a merge when the actor's publish role was $label before commit",
+    async ({ currentRoles }) => {
+      sandboxAccessWithSql.mockImplementation(
+        async (_sql: unknown, _treeId: string, actor: { role: string }) => ({
+          canPublish: actor.role === "publisher",
+        }),
+      );
+      const queries: string[] = [];
+      const tx = Object.assign(
+        vi.fn(async (strings: TemplateStringsArray) => {
+          const query = strings.join(" ");
+          queries.push(query);
+          if (query.includes("select forked_from_seq")) {
+            return [{ forked_from_seq: 1, archived_at: null }];
+          }
+          if (query.includes("from organelle.app_roles")) {
+            return currentRoles;
+          }
+          if (query.includes("insert into organelle.sandbox_merges")) {
+            return [{ merge_id: "cccccccc-cccc-cccc-cccc-cccccccccccc" }];
+          }
+          if (query.includes("select organelle.apply_merge")) {
+            return [{ apply_merge: RESULTING_TREE_ID }];
+          }
+          return [];
+        }),
+        { json: vi.fn((value: unknown) => value) },
+      );
+      const sql = {
+        begin: vi.fn(async (callback: (transaction: typeof tx) => Promise<unknown>) =>
+          callback(tx),
+        ),
+      };
+      vi.mocked(withDbRetry).mockImplementationOnce(async (operation) =>
+        operation(sql as never),
+      );
+
+      const result = await commitMerge(commitArgs({}));
+
+      expect(result).toEqual({ ok: false, code: "error", reason: "Not allowed" });
+      const sandboxLockIndex = queries.findIndex(
+        (query) =>
+          query.includes("select forked_from_seq") && query.includes("for update"),
+      );
+      const roleLockIndex = queries.findIndex(
+        (query) =>
+          query.includes("from organelle.app_roles") && query.includes("for update"),
+      );
+      expect(sandboxLockIndex).toBeGreaterThanOrEqual(0);
+      expect(roleLockIndex).toBeGreaterThan(sandboxLockIndex);
+      expect(
+        queries.some((query) => query.includes("insert into organelle.sandbox_merges")),
+      ).toBe(false);
+      expect(
+        queries.some((query) => query.includes("select organelle.apply_merge")),
+      ).toBe(false);
+    },
+  );
 });

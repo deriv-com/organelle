@@ -49,6 +49,8 @@ jobs:
         run: npm run db:migrate
       - name: Verify migration idempotence and checksums
         run: npm run db:migrate
+      - name: Seed synthetic fixtures for database regressions
+        run: npm run db:seed:demo
       - name: Verify every unit and database test
         run: npm test
       - run: npm run build

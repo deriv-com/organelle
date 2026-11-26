@@ -341,3 +341,11 @@ describe("draftFromMember", () => {
     ).toBe("");
   });
 });
+
+it("reopens a sandbox person with their edited title rather than the original source title", () => {
+  expect(
+    draftFromMember(
+      seatMember({ sourceTitle: "Original title", displayTitle: "Edited title" }),
+    ).jobTitle,
+  ).toBe("Edited title");
+});

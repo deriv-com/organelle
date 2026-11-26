@@ -8,6 +8,7 @@ export type CommandSummary = {
   commandId: string;
   kind: CommandKind;
   undoesCommandId: string | null;
+  actorAuthId?: string | null;
 };
 
 export type CommandStacks = {

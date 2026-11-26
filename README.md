@@ -70,7 +70,8 @@ Inside a sandbox you can:
 
 - Add positions, assistants, and teams from a card's action menu.
 - Move parts of the organization, edit people, and adjust leaf-card columns.
-- Undo and redo edits, and inspect the sandbox's **Changes** history.
+- Undo and redo your own edits, and inspect the sandbox's **Changes** history.
+- Search changes and filter them by action or the person who performed them.
 - Share read access with directory users, or edit access with users who already hold an
   Editor-or-higher organization role.
 - Synchronize a long-running sandbox with a newer published version.

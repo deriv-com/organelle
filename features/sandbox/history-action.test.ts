@@ -10,13 +10,22 @@ const harness = vi.hoisted(() => {
       kind: string;
       owner_auth_id: string | null;
       archived_at?: string | null;
+      access_level?: "viewer" | "editor" | null;
     }>;
     history: Array<Record<string, unknown>>;
   } = { trees: [], history: [] };
   const sql = vi.fn(async (strings: TemplateStringsArray) => {
     const query = strings.join("?").replace(/\s+/g, " ").trim();
-    queries.push(query);
-    if (query.includes("from organelle.trees")) return state.trees;
+    if (query) queries.push(query);
+    if (query.includes("from organelle.trees"))
+      return state.trees
+        .filter((t) => t.kind === "sandbox" && t.owner_auth_id)
+        .map((t) => ({
+          ...t,
+          tree_id: "11111111-1111-4111-8111-111111111111",
+          archived_at: t.archived_at ?? null,
+          access_level: t.access_level ?? null,
+        }));
     if (query.includes("from organelle.change_log")) return state.history;
     return [];
   });
@@ -122,5 +131,15 @@ describe("getSandboxHistory", () => {
 
     await expect(getSandboxHistory(TREE_ID)).resolves.toEqual(harness.state.history);
     expect(harness.queries).toHaveLength(2);
+  });
+  it("allows shared admins, but denies history after their grant is removed", async () => {
+    allow("other", "admin");
+    harness.state.trees = [
+      { kind: "sandbox", owner_auth_id: "owner", access_level: "viewer" },
+    ];
+    harness.state.history = [{ id: "1", op: "rename_header" }];
+    expect(await getSandboxHistory(TREE_ID)).toEqual(harness.state.history);
+    harness.state.trees[0]!.access_level = null;
+    expect(await getSandboxHistory(TREE_ID)).toEqual([]);
   });
 });

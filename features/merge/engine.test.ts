@@ -895,3 +895,508 @@ describe("runMerge tints", () => {
     expect(result.tints.edited).not.toContain("riley");
   });
 });
+
+describe("sandbox synchronization integrity", () => {
+  it("replaces an unchanged occupant and preserves their new primary seat", () => {
+    const oldMember = assignment("person-a", "Person A", { isPrimary: true });
+    const newMember = assignment("person-b", "Person B", { isPrimary: true });
+    const original = seat("original", "root", "Original", { assignments: [oldMember] });
+    const other = seat("other", "root", "Other", { assignments: [] });
+    const result = runMerge({
+      base: [root, original, other],
+      sandbox: [root, original, other],
+      live: [
+        root,
+        { ...original, assignments: [newMember] },
+        { ...other, assignments: [oldMember] },
+      ],
+      liveSeq: 4,
+      forkedFromSeq: 3,
+      target: "sandbox",
+    });
+    expect(result.valid).toBe(true);
+    expect(
+      result.merged
+        .find((n) => n.id === "original")
+        ?.assignments.map((a) => a.employeeAuthId),
+    ).toEqual(["person-b"]);
+    expect(result.merged.find((n) => n.id === "other")?.assignments).toMatchObject([
+      { employeeAuthId: "person-a", isPrimary: true },
+    ]);
+  });
+
+  it.each([false, true])(
+    "requires an explicit decision to restore a deleted live parent (ancestor missing: %s)",
+    (missingAncestor) => {
+      const division = header("division", "root", "Example Division");
+      const team = header("team", "division", "Example Team");
+      const member = seat("member", "root", "Example Person");
+      const input = {
+        base: [root, division, team, member],
+        live: [root, division, team, { ...member, parentId: "team" }],
+        sandbox: missingAncestor ? [root, member] : [root, division, member],
+        liveSeq: 4,
+        forkedFromSeq: 3,
+        target: "sandbox" as const,
+      };
+      const preview = runMerge(input);
+      const conflict = preview.conflicts.find((c) => c.nodeId === "member");
+      expect(conflict).toMatchObject({
+        kind: "concurrent_move",
+        restoreLiveParentId: "team",
+      });
+      const stale = runMerge({
+        ...input,
+        resolutions: { "concurrent_move:member:parent": { choice: "use_live" } },
+      });
+      expect(stale.unresolved).toContainEqual(conflict);
+      const useLive = runMerge({
+        ...input,
+        resolutions: { [conflict!.key]: { choice: "use_live" } },
+      });
+      expect(useLive.merged.filter((n) => n.id === "team")).toHaveLength(1);
+      expect(useLive.merged.find((n) => n.id === "member")?.parentId).toBe("team");
+      expect(useLive.valid).toBe(!missingAncestor);
+      if (missingAncestor)
+        expect(useLive.graphConflicts).toContainEqual(
+          expect.objectContaining({ kind: "combo_orphan" }),
+        );
+      if (missingAncestor) {
+        const orphan = useLive.graphConflicts.find(
+          (c) => c.kind === "combo_orphan" && c.nodeId === "team",
+        )!;
+        expect(orphan.allowed).toContain("pick_new_target");
+        const repaired = runMerge({
+          ...input,
+          resolutions: {
+            [conflict!.key]: { choice: "use_live" },
+            [orphan.key]: { choice: "pick_new_target", newParentId: "root" },
+          },
+        });
+        expect(repaired.valid).toBe(true);
+        expect(repaired.merged.find((n) => n.id === "team")?.parentId).toBe("root");
+      }
+
+      const keepSandbox = runMerge({
+        ...input,
+        resolutions: { [conflict!.key]: { choice: "use_sandbox" } },
+      });
+      expect(keepSandbox.valid).toBe(true);
+      expect(keepSandbox.merged.some((n) => n.id === "team")).toBe(false);
+    },
+  );
+});
+
+describe("primary seat merge", () => {
+  function primarySeat(nodes: MergeNode[], employeeAuthId: string): string | null {
+    return (
+      nodes.find((node) =>
+        node.assignments.some(
+          (member) => member.employeeAuthId === employeeAuthId && member.isPrimary,
+        ),
+      )?.id ?? null
+    );
+  }
+
+  function primaryTree(primaryNodeId: "a" | "b" | "c" = "a"): MergeNode[] {
+    const alex = assignment("alex", "Alex");
+    return [
+      root,
+      seat("a", "root", "Role A", {
+        jobTitle: "Role A",
+        assignments: [{ ...alex, isPrimary: primaryNodeId === "a" }],
+      }),
+      seat("b", "root", "Role B", {
+        jobTitle: "Role B",
+        assignments: [{ ...alex, isPrimary: primaryNodeId === "b" }],
+      }),
+      seat("c", "root", "Role C", {
+        jobTitle: "Role C",
+        assignments: [{ ...alex, isPrimary: primaryNodeId === "c" }],
+      }),
+    ];
+  }
+
+  it("publishes a zero-drift sandbox primary-seat switch and audits it once", () => {
+    const base = primaryTree("a");
+    const result = runMerge({
+      base,
+      live: base,
+      sandbox: primaryTree("b"),
+      liveSeq: 3,
+      forkedFromSeq: 3,
+    });
+
+    expect(result.changes.filter((change) => change.key === "primary:alex")).toEqual([
+      {
+        key: "primary:alex",
+        nodeId: "b",
+        kind: "edit",
+        summary: "Set Alex's primary seat to Role B",
+      },
+    ]);
+    expect(primarySeat(result.merged, "alex")).toBe("b");
+    expect(
+      result.snapshot.assignments.find(
+        (member) => member.employee_auth_id === "alex" && member.is_primary,
+      )?.node_id,
+    ).toBe("b");
+    expect(result.snapshot.logs.filter((log) => log.op === "set_primary_seat")).toEqual(
+      [
+        {
+          op: "set_primary_seat",
+          nodeId: "b",
+          employeeAuthId: "alex",
+          before: { node_id: "a" },
+          after: { node_id: "b" },
+        },
+      ],
+    );
+    expect(result.tints.edited).toContain("b");
+    expect(result.tints.edited).not.toContain("a");
+  });
+
+  it("publishes a sandbox-only primary switch after live has advanced", () => {
+    const base = primaryTree("a");
+    const live = primaryTree("a").map((node) =>
+      node.id === "root" ? { ...node, rowVersion: 2 } : node,
+    );
+    const result = runMerge({
+      base,
+      live,
+      sandbox: primaryTree("b"),
+      liveSeq: 4,
+      forkedFromSeq: 3,
+    });
+
+    expect(result.conflicts).toEqual([]);
+    expect(primarySeat(result.merged, "alex")).toBe("b");
+  });
+
+  it("preserves a live-only primary switch when the sandbox did not change it", () => {
+    const base = primaryTree("a");
+    const result = runMerge({
+      base,
+      live: primaryTree("b"),
+      sandbox: base,
+      liveSeq: 4,
+      forkedFromSeq: 3,
+    });
+
+    expect(result.changes.some((change) => change.key === "primary:alex")).toBe(false);
+    expect(primarySeat(result.merged, "alex")).toBe("b");
+  });
+
+  it("includes or excludes the whole primary switch with one selective key", () => {
+    const base = primaryTree("a");
+    const sandbox = primaryTree("b");
+    const excluded = runMerge({
+      base,
+      live: base,
+      sandbox,
+      liveSeq: 3,
+      forkedFromSeq: 3,
+      includedKeys: [],
+    });
+    const included = runMerge({
+      base,
+      live: base,
+      sandbox,
+      liveSeq: 3,
+      forkedFromSeq: 3,
+      includedKeys: ["primary:alex"],
+    });
+
+    expect(primarySeat(excluded.merged, "alex")).toBe("a");
+    expect(primarySeat(included.merged, "alex")).toBe("b");
+  });
+
+  it("requires a resolution when live and sandbox select different primaries", () => {
+    const base = primaryTree("a");
+    const preview = runMerge({
+      base,
+      live: primaryTree("b"),
+      sandbox: primaryTree("c"),
+      liveSeq: 4,
+      forkedFromSeq: 3,
+    });
+
+    expect(preview.valid).toBe(false);
+    expect(preview.conflicts).toContainEqual(
+      expect.objectContaining({
+        key: "concurrent_edit:alex:primary_seat",
+        kind: "concurrent_edit",
+        field: "primary_seat",
+      }),
+    );
+
+    const useSandbox = runMerge({
+      base,
+      live: primaryTree("b"),
+      sandbox: primaryTree("c"),
+      liveSeq: 4,
+      forkedFromSeq: 3,
+      resolutions: {
+        "concurrent_edit:alex:primary_seat": { choice: "use_sandbox" },
+      },
+    });
+    const useLive = runMerge({
+      base,
+      live: primaryTree("b"),
+      sandbox: primaryTree("c"),
+      liveSeq: 4,
+      forkedFromSeq: 3,
+      resolutions: {
+        "concurrent_edit:alex:primary_seat": { choice: "use_live" },
+      },
+    });
+
+    expect(primarySeat(useSandbox.merged, "alex")).toBe("c");
+    expect(primarySeat(useLive.merged, "alex")).toBe("b");
+  });
+
+  it("conflicts when the sandbox removes the destination of a live primary switch", () => {
+    const base = primaryTree("a");
+    const sandbox = primaryTree("a").map((node) =>
+      node.id === "b" ? { ...node, assignments: [] } : node,
+    );
+    const preview = runMerge({
+      base,
+      live: primaryTree("b"),
+      sandbox,
+      liveSeq: 4,
+      forkedFromSeq: 3,
+    });
+
+    expect(preview.valid).toBe(false);
+    expect(preview.conflicts).toContainEqual(
+      expect.objectContaining({
+        key: "concurrent_edit:alex:primary_seat",
+        field: "primary_seat",
+      }),
+    );
+
+    const useLive = runMerge({
+      base,
+      live: primaryTree("b"),
+      sandbox,
+      liveSeq: 4,
+      forkedFromSeq: 3,
+      resolutions: {
+        "concurrent_edit:alex:primary_seat": { choice: "use_live" },
+      },
+    });
+    expect(primarySeat(useLive.merged, "alex")).toBe("b");
+    expect(
+      useLive.merged
+        .find((node) => node.id === "b")
+        ?.assignments.some((member) => member.employeeAuthId === "alex"),
+    ).toBe(true);
+  });
+
+  it("restores a deleted primary destination seat when the conflict keeps live", () => {
+    const base = primaryTree("a");
+    const sandbox = primaryTree("a").filter((node) => node.id !== "b");
+    const preview = runMerge({
+      base,
+      live: primaryTree("b"),
+      sandbox,
+      liveSeq: 4,
+      forkedFromSeq: 3,
+    });
+
+    expect(preview.valid).toBe(false);
+    expect(
+      preview.conflicts.some((conflict) => conflict.field === "primary_seat"),
+    ).toBe(true);
+
+    const useLive = runMerge({
+      base,
+      live: primaryTree("b"),
+      sandbox,
+      liveSeq: 4,
+      forkedFromSeq: 3,
+      resolutions: {
+        "concurrent_edit:alex:primary_seat": { choice: "use_live" },
+      },
+    });
+    expect(primarySeat(useLive.merged, "alex")).toBe("b");
+    expect(useLive.merged.some((node) => node.id === "b")).toBe(true);
+  });
+
+  it("conflicts when the sandbox removes every role during a live primary switch", () => {
+    const base = primaryTree("a");
+    const sandbox = primaryTree("a").map((node) =>
+      node.kind === "seat" ? { ...node, assignments: [] } : node,
+    );
+    const preview = runMerge({
+      base,
+      live: primaryTree("b"),
+      sandbox,
+      liveSeq: 4,
+      forkedFromSeq: 3,
+    });
+
+    expect(preview.valid).toBe(false);
+    expect(preview.conflicts).toContainEqual(
+      expect.objectContaining({
+        key: "concurrent_edit:alex:primary_seat",
+        field: "primary_seat",
+      }),
+    );
+
+    const useLive = runMerge({
+      base,
+      live: primaryTree("b"),
+      sandbox,
+      liveSeq: 4,
+      forkedFromSeq: 3,
+      resolutions: {
+        "concurrent_edit:alex:primary_seat": { choice: "use_live" },
+      },
+    });
+    expect(primarySeat(useLive.merged, "alex")).toBe("b");
+  });
+
+  it("removes every role when resolving toward a side with no assignments", () => {
+    const base = primaryTree("a");
+    const live = primaryTree("a").map((node) =>
+      node.kind === "seat" ? { ...node, assignments: [] } : node,
+    );
+    const sandbox = primaryTree("b");
+    const preview = runMerge({
+      base,
+      live,
+      sandbox,
+      liveSeq: 4,
+      forkedFromSeq: 3,
+    });
+
+    expect(preview.valid).toBe(false);
+    expect(
+      preview.conflicts.some((conflict) => conflict.field === "primary_seat"),
+    ).toBe(true);
+
+    const useLive = runMerge({
+      base,
+      live,
+      sandbox,
+      liveSeq: 4,
+      forkedFromSeq: 3,
+      resolutions: {
+        "concurrent_edit:alex:primary_seat": { choice: "use_live" },
+      },
+    });
+    expect(primarySeat(useLive.merged, "alex")).toBeNull();
+    expect(
+      useLive.merged.some((node) =>
+        node.assignments.some((member) => member.employeeAuthId === "alex"),
+      ),
+    ).toBe(false);
+  });
+
+  it("does not show a new employee's first assignment as a separate primary switch", () => {
+    const base = [root, seat("a", "root", "Role A", { assignments: [] })];
+    const sandbox = [
+      root,
+      seat("a", "root", "Role A", {
+        assignments: [assignment("new-person", "New Person", { isPrimary: true })],
+      }),
+    ];
+    const result = runMerge({
+      base,
+      live: base,
+      sandbox,
+      liveSeq: 3,
+      forkedFromSeq: 3,
+    });
+
+    expect(result.changes.some((change) => change.key === "assign:a:new-person")).toBe(
+      true,
+    );
+    expect(result.changes.some((change) => change.key === "primary:new-person")).toBe(
+      false,
+    );
+    expect(primarySeat(result.merged, "new-person")).toBe("a");
+  });
+});
+
+describe("manager-only review", () => {
+  it("includes a reporting manager change even when structure is unchanged", () => {
+    const before = {
+      displayName: "Example Person",
+      displayTitle: "Engineer",
+      avatarUrl: null,
+      primaryManagerAuthId: "manager-a",
+    };
+    const result = runMerge({
+      base: baseTree(),
+      live: baseTree(),
+      sandbox: baseTree(),
+      liveSeq: 1,
+      forkedFromSeq: 1,
+      liveEmployeeDetails: { person: before },
+      sandboxOverrides: { person: { ...before, primaryManagerAuthId: "manager-b" } },
+    });
+    expect(
+      result.changes.find((change) => change.key === "employee:person")?.fieldChanges ??
+        [],
+    ).toContainEqual(
+      expect.objectContaining({
+        field: "primaryManagerAuthId",
+        label: "Reporting manager",
+        before: "manager-a",
+        after: "manager-b",
+      }),
+    );
+  });
+});
+
+describe("sandbox membership synchronization", () => {
+  it("preserves a sandbox-only member removal when live changes elsewhere", () => {
+    const first = assignment("person-a", "Example A");
+    const second = assignment("person-b", "Example B", { isHost: false });
+    const shared = seat("shared", "root", "Shared", { assignments: [first, second] });
+    const result = runMerge({
+      base: [root, shared],
+      live: [root, shared, header("new", "root", "New team")],
+      sandbox: [root, { ...shared, assignments: [first] }],
+      liveSeq: 4,
+      forkedFromSeq: 3,
+      target: "sandbox",
+    });
+    expect(result.valid).toBe(true);
+    expect(
+      result.merged
+        .find((n) => n.id === "shared")
+        ?.assignments.map((a) => a.employeeAuthId),
+    ).toEqual(["person-a"]);
+  });
+  it("preserves a sandbox-only host selection when live changes elsewhere", () => {
+    const first = assignment("person-a", "Example A");
+    const second = assignment("person-b", "Example B", { isHost: false });
+    const shared = seat("shared", "root", "Shared", { assignments: [first, second] });
+    const result = runMerge({
+      base: [root, shared],
+      live: [root, shared, header("new", "root", "New team")],
+      sandbox: [
+        root,
+        {
+          ...shared,
+          assignments: [
+            { ...first, isHost: false },
+            { ...second, isHost: true },
+          ],
+        },
+      ],
+      liveSeq: 4,
+      forkedFromSeq: 3,
+      target: "sandbox",
+    });
+    expect(result.valid).toBe(true);
+    expect(
+      result.merged.find((n) => n.id === "shared")?.assignments.find((a) => a.isHost)
+        ?.employeeAuthId,
+    ).toBe("person-b");
+  });
+});

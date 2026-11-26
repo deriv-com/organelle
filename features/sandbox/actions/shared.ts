@@ -79,11 +79,17 @@ export async function loadCommandSummaries(
   treeId: string,
 ): Promise<CommandSummary[]> {
   const rows = await tx<
-    { commandId: string; kind: string; undoesCommandId: string | null }[]
+    {
+      commandId: string;
+      kind: string;
+      undoesCommandId: string | null;
+      actorAuthId: string | null;
+    }[]
   >`
     select command_id::text as "commandId",
-           min(command_kind::text) as kind,
-           min(undoes_command_id::text) as "undoesCommandId"
+           (array_agg(command_kind::text order by id))[1] as kind,
+           (array_agg(undoes_command_id::text order by id))[1] as "undoesCommandId",
+           (array_agg(actor_auth_id::text order by id) filter (where command_kind = 'user'))[1] as "actorAuthId"
       from organelle.change_log
      where tree_id = ${treeId} and command_id is not null
      group by command_id
@@ -93,6 +99,7 @@ export async function loadCommandSummaries(
     commandId: row.commandId,
     kind: row.kind as CommandSummary["kind"],
     undoesCommandId: row.undoesCommandId,
+    actorAuthId: row.actorAuthId,
   }));
 }
 
@@ -114,13 +121,21 @@ export async function loadCommandLog(
 }
 
 export async function undoChromeFor(
-  tx: TransactionSql,
+  tx: Sql | TransactionSql,
   treeId: string,
   commandId: string | null,
+  actorAuthId: string,
 ): Promise<UndoChrome> {
-  const stacks = reconstructStacks(await loadCommandSummaries(tx, treeId));
-  const undoId = stacks.undo.at(-1) ?? null;
-  const redoId = stacks.redo.at(-1) ?? null;
+  const summaries = await loadCommandSummaries(tx, treeId);
+  const stacks = reconstructStacks(summaries);
+  const ownTip = (id: string | undefined) =>
+    id &&
+    actorAuthId &&
+    summaries.find((s) => s.commandId === id)?.actorAuthId === actorAuthId
+      ? id
+      : null;
+  const undoId = ownTip(stacks.undo.at(-1));
+  const redoId = ownTip(stacks.redo.at(-1));
   const undoLog = undoId ? await loadCommandLog(tx, treeId, undoId) : [];
   const redoLog = redoId ? await loadCommandLog(tx, treeId, redoId) : [];
   return {
@@ -138,10 +153,11 @@ export async function ackTouched(
   tx: TransactionSql,
   treeId: string,
   nodeIds: Iterable<string>,
-  commandId: string | null = null,
+  commandId: string | null,
+  actorAuthId: string,
 ): Promise<ActionOk> {
   const unique = [...new Set(nodeIds)];
-  const chrome = await undoChromeFor(tx, treeId, commandId);
+  const chrome = await undoChromeFor(tx, treeId, commandId, actorAuthId);
   if (unique.length === 0) return toPersistAck([], chrome);
   const rows = await tx<{ node_id: string; row_version: number }[]>`
     select node_id::text as node_id, row_version

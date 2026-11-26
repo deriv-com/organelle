@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
 
+import { closeSandboxHistorySheet } from "@/features/chart/view-on-chart";
 import { useOrgData } from "@/store/org-data";
 
 export const SANDBOX_ACCESS_REVALIDATE_MS = 15_000;
@@ -28,11 +29,19 @@ export function SandboxAccessRevalidator({ treeId }: { treeId: string }) {
             signal: controller.signal,
           },
         );
-        if (stopped || (response.status !== 401 && response.status !== 403)) {
+        if (stopped) return;
+        if (response.status === 401 || response.status === 403) {
+          if (useOrgData.getState().historyOpen) closeSandboxHistorySheet();
+          useOrgData.getState().clearTreeData(treeId);
+          router.replace("/chart");
           return;
         }
-        useOrgData.getState().clearTreeData(treeId);
-        router.replace("/chart");
+        if (!response.ok) return;
+        const access = (await response.json()) as { canReadHistory?: boolean };
+        if (stopped) return;
+        if (access.canReadHistory !== true && useOrgData.getState().historyOpen)
+          closeSandboxHistorySheet();
+        useOrgData.getState().setSandboxCanReadHistory(access.canReadHistory === true);
       } catch {
         // A transient network failure is not proof that access was revoked.
       } finally {

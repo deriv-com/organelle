@@ -69,7 +69,9 @@ export function resolveSandboxAccess(args: {
     canPublish: active && canMerge && (ownerHasWorkspaceRole || shareLevel !== null),
     canManageSharing,
     canManageLifecycle: ownerHasWorkspaceRole,
-    canReadHistory: ownerHasWorkspaceRole,
+    canReadHistory:
+      ownerHasWorkspaceRole ||
+      (shareLevel !== null && hasAllowedRole(args.actor.role, SANDBOX_SHARING_ROLES)),
   };
 }
 

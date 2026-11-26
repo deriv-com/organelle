@@ -49,6 +49,14 @@ developers can receive read-only shares. Editor access can be assigned only to a
 Editor, Publisher, or Admin; shared Publishers and Admins receive effective Editor
 access automatically.
 
+Sandbox owners and shared editors can synchronize with the published chart. Re-fork
+remains owner-only.
+
+Sandbox history is available to its owner and explicitly shared Admins. Removing a share
+removes history access as well. Undo and redo apply only to the current user’s command
+at the top of the shared stack; they cannot skip or reverse another user’s command.
+Legacy commands without an attributable actor cannot be undone.
+
 Admins cannot remove the final administrator. Bootstrap creates only the first admin;
 subsequent changes use the in-app role manager. Use least privilege and periodically
 review roles, shares, provider access, and API keys.

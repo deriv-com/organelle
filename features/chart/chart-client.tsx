@@ -365,6 +365,7 @@ export function ChartClient({
     setMotion((prev) => ({ id: nodeId, gen: (prev?.gen ?? 0) + 1 }));
   }, []);
 
+  const historyAllowed = useOrgData((state) => state.sandboxCanReadHistory);
   const undoGen = useOrgData((state) => state.undoGen);
   const redoGen = useOrgData((state) => state.redoGen);
   const lastUndoGen = useRef(0);
@@ -969,18 +970,6 @@ export function ChartClient({
   return (
     <div className="flex h-full w-full flex-col">
       <div className="relative min-h-0 flex-1">
-        {treeKind === "sandbox" &&
-          editable &&
-          liveSeq != null &&
-          forkedFromSeq != null && (
-            <div className="pointer-events-none absolute left-4 top-4 z-20">
-              <StaleBanner
-                sandboxTreeId={treeId}
-                forkedFromSeq={forkedFromSeq}
-                liveSeq={liveSeq}
-              />
-            </div>
-          )}
         <OrgChartView
           treeId={treeId}
           rows={visibleRows}
@@ -1002,8 +991,8 @@ export function ChartClient({
           onSetLeafGridColumns={persistLeafGridColumns}
           cameraRef={cameraRef}
         />
-        <div className="pointer-events-none absolute left-1/2 top-4 z-20 -translate-x-1/2">
-          <div className="pointer-events-auto">
+        <div className="pointer-events-none absolute inset-x-4 top-4 z-20 flex flex-wrap items-start gap-2">
+          <div className="pointer-events-auto min-w-0 flex-1 basis-64">
             <ChartSearch
               rows={visibleRows}
               includeJobTitle={treeKind === "sandbox"}
@@ -1016,14 +1005,25 @@ export function ChartClient({
               }
             />
           </div>
-        </div>
-        {treeKind === "sandbox" && editable && (
-          <div className="pointer-events-none absolute right-4 top-4 z-20 flex flex-col items-end gap-2">
+          {treeKind === "sandbox" &&
+            editable &&
+            liveSeq != null &&
+            forkedFromSeq != null && (
+              <div className="pointer-events-auto min-w-0 max-w-full">
+                <StaleBanner
+                  sandboxTreeId={treeId}
+                  forkedFromSeq={forkedFromSeq}
+                  liveSeq={liveSeq}
+                  canRefork={ownerAuthId === actor?.authId}
+                />
+              </div>
+            )}
+          {treeKind === "sandbox" && editable && (
             <div className="pointer-events-auto">
               <UnplacedBadge items={unplaced} />
             </div>
-          </div>
-        )}
+          )}
+        </div>
         <div className="pointer-events-none absolute right-4 bottom-4 z-20">
           <div className="pointer-events-auto">
             <ChartControls
@@ -1033,7 +1033,7 @@ export function ChartClient({
             />
           </div>
         </div>
-        {canReadHistory && <SandboxHistory treeId={treeId} />}
+        {historyAllowed && <SandboxHistory treeId={treeId} />}
         {addRequest && (
           <AddNodeDialog
             request={addRequest}

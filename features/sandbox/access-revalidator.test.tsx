@@ -73,4 +73,30 @@ describe("SandboxAccessRevalidator", () => {
     expect(router.replace).not.toHaveBeenCalled();
     expect(useOrgData.getState().treeId).toBe("sandbox-1");
   });
+  it("closes history when access to history is removed without losing chart access", async () => {
+    useOrgData.setState({ sandboxCanReadHistory: true, historyOpen: true });
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(Response.json({ canView: true, canReadHistory: false })),
+    );
+    render(<SandboxAccessRevalidator treeId="sandbox-1" />);
+    await waitFor(() =>
+      expect(useOrgData.getState().sandboxCanReadHistory).toBe(false),
+    );
+    expect(useOrgData.getState().historyOpen).toBe(false);
+    expect(useOrgData.getState().treeId).toBe("sandbox-1");
+    expect(router.replace).not.toHaveBeenCalled();
+  });
+  it("clears open history as well as the chart on a revoked share", async () => {
+    useOrgData.setState({ sandboxCanReadHistory: true, historyOpen: true });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(null, { status: 403 })),
+    );
+    render(<SandboxAccessRevalidator treeId="sandbox-1" />);
+    await waitFor(() => expect(router.replace).toHaveBeenCalledWith("/chart"));
+    expect(useOrgData.getState().historyOpen).toBe(false);
+  });
 });
