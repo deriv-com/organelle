@@ -1,0 +1,5 @@
+# Exact fingerprints of synthetic examples in the initial public release.
+# New commits and other examples remain fully scanned.
+93491cf2990ebd16b6ff9f000b1945d60c23d26a:docs/api.md:curl-auth-header:12
+93491cf2990ebd16b6ff9f000b1945d60c23d26a:lib/app-logging.test.ts:generic-api-key:83
+93491cf2990ebd16b6ff9f000b1945d60c23d26a:lib/app-logging.test.ts:generic-api-key:89
