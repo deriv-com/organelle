@@ -433,6 +433,7 @@ export function MergeReview({
   // Keep every original conflict visible so a user can inspect or change a
   // selection instead of making it disappear like an already-applied action.
   const allConflicts = [...computed.conflicts, ...computed.graphConflicts];
+  const bulkConflicts = allConflicts.filter((c) => !c.restoreLiveParentId);
 
   useEffect(() => {
     if (mergeDialog === "conflicts") setActiveTab("conflicts");
@@ -449,7 +450,7 @@ export function MergeReview({
   const bulk = (side: "live" | "sandbox") => {
     setResolutions((prev) => {
       const next = { ...prev };
-      for (const conflict of allConflicts) {
+      for (const conflict of bulkConflicts) {
         const resolution = bulkResolutionFor(conflict, side);
         if (resolution) next[conflict.key] = resolution;
       }
@@ -564,7 +565,7 @@ export function MergeReview({
 
   return (
     <div className="flex h-[calc(100vh-3.5rem)] flex-col">
-      {allConflicts.length > 25 ? (
+      {allConflicts.length > 25 && preview.canRefork ? (
         <Alert className="rounded-none border-x-0 border-t-0">
           <AlertTitle>This sandbox has drifted a long way from live</AlertTitle>
           <AlertDescription className="flex flex-wrap items-center gap-3">
@@ -715,7 +716,7 @@ export function MergeReview({
                           className="h-7 text-xs"
                           onClick={() => bulk("live")}
                           disabled={
-                            !allConflicts.some((conflict) =>
+                            !bulkConflicts.some((conflict) =>
                               bulkResolutionFor(conflict, "live"),
                             )
                           }
@@ -728,7 +729,7 @@ export function MergeReview({
                           className="h-7 text-xs"
                           onClick={() => bulk("sandbox")}
                           disabled={
-                            !allConflicts.some((conflict) =>
+                            !bulkConflicts.some((conflict) =>
                               bulkResolutionFor(conflict, "sandbox"),
                             )
                           }

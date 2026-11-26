@@ -5,6 +5,17 @@ All notable changes are documented here. The project follows Semantic Versioning
 
 ## Unreleased
 
+- Preserve primary-seat choices and surface concurrent primary-seat conflicts during
+  merge review; synchronize replaced occupants and explicitly restore deleted parents.
+- Restrict undo and redo to the current user’s top command, recheck publishing roles
+  inside the commit transaction, and refresh shared history permissions while open.
+- Add sandbox history search and action/person filters, with history available to
+  explicitly shared Admins.
+- Improve chart search keyboard navigation, responsive sandbox controls, assistant
+  collapse, and reporting-manager display for shared seats.
+- Keep error deduplication local to each request and scan proposed public files
+  regardless of extension.
+
 - Release publication awaits written authorization for Apache-2.0 relicensing and use of
   the Organelle name and icon.
 

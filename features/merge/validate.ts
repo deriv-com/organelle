@@ -78,7 +78,8 @@ export function validateGraph(nodes: MergeNode[]): Conflict[] {
         });
       }
     } else {
-      const node = unreached[0]!;
+      const node =
+        unreached.find((candidate) => !byId.has(candidate.parentId)) ?? unreached[0]!;
       const parent = byId.get(node.parentId);
       conflicts.push({
         key: `combo_orphan:${node.id}`,
@@ -90,7 +91,7 @@ export function validateGraph(nodes: MergeNode[]): Conflict[] {
         sentence: `Including or excluding these together would leave ${nodeLabel(node)} without a parent${parent ? ` (under ${nodeLabel(parent)})` : ""}. Include the parent change or exclude this one.`,
         live: parent ? graphSide(parent) : MISSING,
         sandbox: graphSide(node),
-        allowed: ["drop"],
+        allowed: ["pick_new_target", "drop"],
       });
     }
   }

@@ -94,7 +94,7 @@ export function draftFromMember(member: SeatMember): EmployeeDraft {
     legalFullName: member.legalFullName ?? "",
     employeeId: member.employeeId ?? "",
     employmentRecord: member.employmentRecord ?? "",
-    jobTitle: member.sourceTitle || member.displayTitle,
+    jobTitle: member.displayTitle,
     positionLevel: member.positionLevel == null ? "" : String(member.positionLevel),
     avatarUrl: member.avatarUrl ?? "",
     officeCountry: member.officeCountry ?? "",

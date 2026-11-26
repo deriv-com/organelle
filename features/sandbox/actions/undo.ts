@@ -13,7 +13,6 @@ import { applyCommandSql } from "../command-sql";
 import { inverseLogRows } from "../invert-command";
 import { sandboxAccessWithSql } from "../access";
 import { lockEditableSandbox, UUID_RE } from "../lock";
-import { canReadSandboxHistory } from "../read-access";
 import type { UndoChrome } from "../persist-ack";
 import {
   ackTouched,
@@ -54,8 +53,14 @@ export async function getUndoState(treeId: string): Promise<UndoState> {
     if (!sandboxAccess?.canEdit) return EMPTY_UNDO_STATE;
     const summaries = await loadCommandSummaries(sql, treeId);
     const stacks = reconstructStacks(summaries);
-    const undoCommandId = stacks.undo.at(-1) ?? null;
-    const redoCommandId = stacks.redo.at(-1) ?? null;
+    const owns = (id: string | undefined) =>
+      id &&
+      access.actor.authId &&
+      summaries.find((s) => s.commandId === id)?.actorAuthId === access.actor.authId
+        ? id
+        : null;
+    const undoCommandId = owns(stacks.undo.at(-1));
+    const redoCommandId = owns(stacks.redo.at(-1));
     const undoLog = undoCommandId
       ? await loadCommandLog(sql, treeId, undoCommandId)
       : [];
@@ -115,9 +120,14 @@ async function runStackAction(
           rejected = denied;
           return;
         }
-        const stacks = reconstructStacks(await loadCommandSummaries(tx, treeId));
+        const summaries = await loadCommandSummaries(tx, treeId);
+        const stacks = reconstructStacks(summaries);
         const tip = direction === "undo" ? stacks.undo.at(-1) : stacks.redo.at(-1);
-        if (!tip) {
+        if (
+          !tip ||
+          !actor ||
+          summaries.find((s) => s.commandId === tip)?.actorAuthId !== actor
+        ) {
           rejected = {
             ok: false,
             reason: direction === "undo" ? "Nothing to undo" : "Nothing to redo",
@@ -150,7 +160,7 @@ async function runStackAction(
           });
         }
         await tx`select organelle.validate_tree(${treeId})`;
-        committed = await ackTouched(tx, treeId, touched, command.commandId);
+        committed = await ackTouched(tx, treeId, touched, command.commandId, actor);
       });
       return committed ?? rejected ?? { ok: false, reason: "Unknown failure" };
     },
@@ -192,6 +202,7 @@ export interface HistoryRow {
   employee_name?: string | null;
   employee_avatar_url?: string | null;
   actor_name?: string | null;
+  actor_auth_id?: string | null;
   before: Record<string, unknown> | null;
   after: Record<string, unknown> | null;
   created_at: string;
@@ -205,23 +216,8 @@ export async function getSandboxHistory(treeId: string): Promise<HistoryRow[]> {
   const access = await requireRole(EDITOR_ROLES);
   if (!access.ok) return [];
   return withDbRetry(async (sql) => {
-    const trees = await sql<{ kind: string; owner_auth_id: string | null }[]>`
-      select kind, owner_auth_id
-      from organelle.trees
-      where tree_id = ${treeId}
-    `;
-    const tree = trees[0];
-    if (
-      !tree ||
-      !canReadSandboxHistory({
-        kind: tree.kind,
-        ownerAuthId: tree.owner_auth_id,
-        actorId: access.actor.authId,
-        role: access.actor.role,
-      })
-    ) {
-      return [];
-    }
+    const sandboxAccess = await sandboxAccessWithSql(sql, treeId, access.actor);
+    if (!sandboxAccess?.canReadHistory) return [];
     const rows = await sql<HistoryRow[]>`
       select
         cl.id::text as id,
@@ -236,7 +232,8 @@ export async function getSandboxHistory(treeId: string): Promise<HistoryRow[]> {
         cl.undoes_command_id::text as undoes_command_id,
         e.full_name as employee_name,
         e.avatar_url as employee_avatar_url,
-        actor.full_name as actor_name
+        actor.full_name as actor_name,
+        cl.actor_auth_id::text as actor_auth_id
       from organelle.change_log cl
       left join organelle.employees e
         on e.auth_id = coalesce(cl.employee_auth_id, (cl.before->'members'->>0)::uuid)

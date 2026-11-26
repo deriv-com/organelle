@@ -123,6 +123,7 @@ export type Conflict = {
   sandbox: ConflictSide;
   allowed: ResolutionChoice[];
   relatedId?: string;
+  restoreLiveParentId?: string;
 };
 
 export type MergeCounts = {

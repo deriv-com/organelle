@@ -186,7 +186,7 @@ describe("sandbox-scoped access", () => {
       expect(access.shareLevel).toBe("editor");
       expect(access.canEdit).toBe(true);
       expect(access.canPublish).toBe(true);
-      expect(access.canReadHistory).toBe(false);
+      expect(access.canReadHistory).toBe(actor.role === "admin");
     },
   );
 
@@ -212,4 +212,28 @@ describe("sandbox-scoped access", () => {
     expect(resolve(admin)).toBe(true);
     expect(resolve(publisher)).toBe(false);
   });
+});
+
+describe("history access for shared administrators", () => {
+  it.each(["viewer", "developer", "editor", "publisher", "admin"] as const)(
+    "keeps %s within public capabilities",
+    (role) => {
+      const args = {
+        treeId: "s",
+        ownerAuthId: "owner",
+        archived: false,
+        shareLevel: "viewer" as const,
+        actor: {
+          authId: "recipient",
+          email: "person@example.com",
+          name: "Example",
+          role,
+        },
+      };
+      expect(resolveSandboxAccess(args).canReadHistory).toBe(role === "admin");
+      expect(resolveSandboxAccess({ ...args, shareLevel: null }).canReadHistory).toBe(
+        false,
+      );
+    },
+  );
 });

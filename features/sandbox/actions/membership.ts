@@ -375,7 +375,7 @@ export async function moveMember(args: {
 
         await tx`select organelle.refresh_primary(${treeId}, ${employeeAuthId}, ${actor})`;
         await tx`select organelle.validate_tree(${treeId})`;
-        committed = await ackTouched(tx, treeId, touched, command.commandId);
+        committed = await ackTouched(tx, treeId, touched, command.commandId, actor);
       });
       return committed ?? rejected ?? { ok: false, reason: "Unknown failure" };
     },
@@ -579,6 +579,7 @@ export async function joinPeer(args: {
           treeId,
           [targetSeatId, ...order],
           command.commandId,
+          actor,
         );
       });
       return committed ?? rejected ?? { ok: false, reason: "Unknown failure" };

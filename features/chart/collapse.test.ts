@@ -144,7 +144,7 @@ describe("expand / collapse next vs all", () => {
     expect(subtreeFullyExpanded(rows, index, "a")).toBe(false);
   });
 
-  it("keeps the assistant expanded when the parent is collapsed", () => {
+  it("collapses assistants when the parent is collapsed", () => {
     const rows = [
       rowAt("root"),
       { ...rowAt("boss", "root", 0), kind: "seat" as const },
@@ -155,7 +155,7 @@ describe("expand / collapse next vs all", () => {
     for (const row of rows) row._expanded = true;
     collapseAllDescendants(rows, index, "boss");
     expect(rows.find((r) => r.id === "boss")!._expanded).toBe(true);
-    expect(rows.find((r) => r.id === "asst")!._expanded).toBe(true);
+    expect(rows.find((r) => r.id === "asst")!._expanded).toBe(false);
     expect(rows.find((r) => r.id === "kid")!._expanded).toBe(false);
     expect(hasVisibleChildren(rows, index, "boss")).toBe(false);
   });
@@ -307,4 +307,19 @@ describe("global visible budget", () => {
     expect(outcome.limited).toBe(true);
     expect(rows[0]!._expanded).toBe(true);
   });
+});
+
+describe("assistant collapse", () => {
+  it.each([collapseNextLevel, collapseAllDescendants])(
+    "collapses assistants together with regular descendants",
+    (collapse) => {
+      const rows = [
+        rowAt("root"),
+        { ...rowAt("assistant", "root"), isAssistant: true, _expanded: true },
+        { ...rowAt("report", "assistant"), _expanded: true },
+      ];
+      collapse(rows, indexFromRows(rows), "root");
+      expect(rows.slice(1).every((row) => row._expanded === false)).toBe(true);
+    },
+  );
 });

@@ -24,6 +24,7 @@ import {
 import { buildProspectiveChangeReasons } from "@/features/reports/changes/prospective";
 import { getSandboxAccess, sandboxAccessWithSql } from "@/features/sandbox/access";
 import { runMerge } from "./engine";
+import { assertSandboxSnapshotUnchanged } from "./snapshot-consistency";
 import { fetchPublishedEmployeeDetails } from "./published-employee-details";
 import {
   employeeDetailsFromRows,
@@ -39,6 +40,7 @@ import { UUID_RE } from "@/lib/uuid";
 export type PreviewPayload = {
   sandboxTreeId: string;
   sandboxName: string;
+  canRefork?: boolean;
   stagedEmployeeCount?: number;
   liveSeq: number;
   forkedFromSeq: number;
@@ -64,13 +66,18 @@ type MergeActor = { authId: string; role: string };
 async function requirePublishAccess(
   sandboxTreeId: string,
 ): Promise<
-  { ok: true; actor: Actor } | { ok: false; reason: string; status?: number }
+  | { ok: true; actor: Actor; canRefork: boolean }
+  | { ok: false; reason: string; status?: number }
 > {
   const session = await requireActor();
   if (!session.ok) return { ok: false, reason: "Not allowed", status: session.status };
   const access = await getSandboxAccess(sandboxTreeId, session.actor);
   if (!access?.canPublish) return { ok: false, reason: "Not allowed", status: 403 };
-  return { ok: true, actor: session.actor };
+  return {
+    ok: true,
+    actor: session.actor,
+    canRefork: access.canManageLifecycle === true,
+  };
 }
 
 function logMergeRejection(args: {
@@ -99,11 +106,18 @@ async function loadAndMerge(
   sandboxTreeId: string,
   options?: {
     target?: MergeTarget;
+    canRefork?: boolean;
     resolutions?: Record<string, Resolution>;
     includedKeys?: string[] | null;
   },
 ): Promise<
-  { preview: PreviewPayload; liveSeq: number; result: MergeResult } | { error: string }
+  | {
+      preview: PreviewPayload;
+      liveSeq: number;
+      result: MergeResult;
+      sandboxOverrideVersions: Record<string, string | null>;
+    }
+  | { error: string }
 > {
   const target = options?.target ?? "published";
   if (!UUID_RE.test(sandboxTreeId)) return { error: "Malformed id" };
@@ -156,6 +170,7 @@ async function loadAndMerge(
     stagedEmployeeCount,
     sandboxTreeId,
     sandboxName: sandbox.name,
+    canRefork: options?.canRefork ?? false,
     liveSeq: live.versionSeq,
     forkedFromSeq: sandbox.forkedFromSeq,
     zeroDrift: result.zeroDrift,
@@ -177,7 +192,14 @@ async function loadAndMerge(
       label: nodeLabel(node),
     })),
   };
-  return { preview, liveSeq: live.versionSeq, result };
+  return {
+    preview,
+    liveSeq: live.versionSeq,
+    result,
+    sandboxOverrideVersions: Object.fromEntries(
+      Object.entries(sandboxOverrides).map(([id, row]) => [id, row.updatedAt ?? null]),
+    ),
+  };
 }
 
 export async function previewMerge(
@@ -198,7 +220,7 @@ export async function previewMerge(
     });
     return { error: access.reason };
   }
-  const loaded = await loadAndMerge(sandboxTreeId);
+  const loaded = await loadAndMerge(sandboxTreeId, { canRefork: access.canRefork });
   if ("error" in loaded) {
     logActionResult({
       logger: "merge.workflow",
@@ -236,26 +258,27 @@ export async function previewMerge(
   return loaded.preview;
 }
 
-async function requireOwnedSandbox(
+async function requireEditableSandbox(
   sandboxTreeId: string,
-): Promise<{ ok: true; actor: MergeActor } | { ok: false; reason: string }> {
-  const access = await requireRole(EDITOR_ROLES);
-  if (!access.ok) return access;
-  const sandbox = await fetchTree(sandboxTreeId);
-  if (!sandbox || sandbox.kind !== "sandbox") {
-    return { ok: false, reason: "Sandbox not found" };
-  }
-  if (sandbox.ownerAuthId !== access.actor.authId) {
-    return { ok: false, reason: "Only the sandbox owner can do this" };
-  }
-  return { ok: true, actor: access.actor };
+): Promise<
+  { ok: true; actor: Actor; canRefork: boolean } | { ok: false; reason: string }
+> {
+  const session = await requireRole(EDITOR_ROLES);
+  if (!session.ok) return session;
+  const access = await getSandboxAccess(sandboxTreeId, session.actor);
+  if (!access?.canEdit) return { ok: false, reason: "Not allowed" };
+  return {
+    ok: true,
+    actor: session.actor,
+    canRefork: access.canManageLifecycle === true,
+  };
 }
 
 export async function previewSync(
   sandboxTreeId: string,
 ): Promise<PreviewPayload | { error: string }> {
   const startedAt = logStart();
-  const access = await requireOwnedSandbox(sandboxTreeId);
+  const access = await requireEditableSandbox(sandboxTreeId);
   if (!access.ok) {
     logMergeRejection({
       operation: "preview_sync",
@@ -268,7 +291,10 @@ export async function previewSync(
     });
     return { error: access.reason };
   }
-  const loaded = await loadAndMerge(sandboxTreeId, { target: "sandbox" });
+  const loaded = await loadAndMerge(sandboxTreeId, {
+    target: "sandbox",
+    canRefork: access.canRefork,
+  });
   if ("error" in loaded) {
     logActionResult({
       logger: "merge.workflow",
@@ -339,7 +365,7 @@ export async function commitSync(args: {
   | { ok: false; code: "error"; reason: string }
 > {
   const startedAt = logStart();
-  const access = await requireOwnedSandbox(args.sandboxTreeId);
+  const access = await requireEditableSandbox(args.sandboxTreeId);
   if (!access.ok) {
     logMergeRejection({
       operation: "commit_sync",
@@ -355,6 +381,7 @@ export async function commitSync(args: {
   }
   const loaded = await loadAndMerge(args.sandboxTreeId, {
     target: "sandbox",
+    canRefork: access.canRefork,
     resolutions: args.resolutions,
   });
   if ("error" in loaded) {
@@ -461,13 +488,27 @@ export async function commitSync(args: {
           from organelle.trees
           where tree_id = ${args.sandboxTreeId}
             and kind = 'sandbox'
-            and owner_auth_id = ${actor}
           for update
         `;
           if (sandbox.length !== 1) throw new Error("Sandbox not found");
           if (sandbox[0]!.archived_at !== null) {
             throw new Error("Sandbox is archived — restore it first");
           }
+
+          const roles = await tx<{ role: Actor["role"] }[]>`
+            select role::text as role from organelle.app_roles where auth_id = ${actor} for update
+          `;
+          const lockedAccess = await sandboxAccessWithSql(tx, args.sandboxTreeId, {
+            ...access.actor,
+            role: roles[0]?.role ?? "viewer",
+          });
+          if (!lockedAccess?.canEdit) throw new Error("Edit access was removed");
+          await assertSandboxSnapshotUnchanged(
+            tx,
+            args.sandboxTreeId,
+            loaded.result.snapshot.expectedNodeVersions,
+            loaded.sandboxOverrideVersions,
+          );
 
           const inserted = await tx<{ sync_id: string }[]>`
           insert into organelle.sandbox_syncs (
@@ -790,11 +831,14 @@ export async function commitMerge(args: {
           if (sandbox[0]!.archived_at !== null) {
             throw new Error("Sandbox is archived — restore it first");
           }
-          const lockedAccess = await sandboxAccessWithSql(
-            tx,
-            args.sandboxTreeId,
-            access.actor,
-          );
+          const roles = await tx<{ role: Actor["role"] }[]>`
+            select role::text as role from organelle.app_roles
+            where auth_id = ${access.actor.authId} for update
+          `;
+          const lockedAccess = await sandboxAccessWithSql(tx, args.sandboxTreeId, {
+            ...access.actor,
+            role: roles[0]?.role ?? "viewer",
+          });
           if (!lockedAccess?.canPublish) {
             throw new Error("Publish access was removed");
           }

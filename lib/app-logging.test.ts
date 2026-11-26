@@ -565,12 +565,33 @@ describe("console capture", () => {
     const error = new Error("already logged");
     Object.assign(error, { digest: "digest-1" });
 
-    logging.noteRequestErrorLogged("digest-1");
-    console.error(error);
+    logging.runWithRequestLogContext({ request_id: "same-request" }, () => {
+      logging.noteRequestErrorLogged("digest-1");
+      console.error(error);
+    });
 
     expect(capturedLines).toHaveLength(0);
   });
 
+  it("keeps errors with the same digest from separate requests", () => {
+    const logging = loadServerLoggingModule();
+    logging.installConsoleCapture();
+    const error = Object.assign(new Error("request failed"), { digest: "same-digest" });
+    logging.runWithRequestLogContext({ request_id: "request-a" }, () =>
+      logging.noteRequestErrorLogged("same-digest"),
+    );
+    logging.runWithRequestLogContext({ request_id: "request-b" }, () =>
+      console.error(error),
+    );
+    expect(capturedLines).toHaveLength(1);
+    expect(JSON.parse(capturedLines[0]!).request_id).toBe("request-b");
+  });
+  it("retains the error message when the framework prefixes console output", () => {
+    const logging = loadServerLoggingModule();
+    logging.installConsoleCapture();
+    console.error("⨯", new Error("example failure"));
+    expect(JSON.parse(capturedLines[0]!).message).toBe("example failure");
+  });
   it("converts stderr multiline writes to structured JSON lines", () => {
     const logging = loadServerLoggingModule();
     logging.installConsoleCapture();

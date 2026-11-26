@@ -389,7 +389,7 @@ export async function createNode(args: CreateNodeArgs): Promise<ActionResult> {
         });
 
         await tx`select organelle.validate_tree(${treeId})`;
-        committed = await ackTouched(tx, treeId, [nodeId], command.commandId);
+        committed = await ackTouched(tx, treeId, [nodeId], command.commandId, actor);
       });
       return committed ?? rejected ?? { ok: false, reason: "Unknown failure" };
     },
@@ -809,6 +809,7 @@ export async function moveNode(args: {
             ...detached.map((child) => child.nodeId),
           ],
           command.commandId,
+          actor,
         );
       });
       return committed ?? rejected ?? { ok: false, reason: "Unknown failure" };
@@ -1019,7 +1020,7 @@ export async function deleteNode(args: {
         });
 
         await tx`select organelle.validate_tree(${treeId})`;
-        committed = await ackTouched(tx, treeId, order, command.commandId);
+        committed = await ackTouched(tx, treeId, order, command.commandId, actor);
       });
       return committed ?? rejected ?? { ok: false, reason: "Unknown failure" };
     },
@@ -1163,7 +1164,7 @@ export async function renameHeader(args: {
             command,
           });
         }
-        committed = await ackTouched(tx, treeId, [nodeId], command.commandId);
+        committed = await ackTouched(tx, treeId, [nodeId], command.commandId, actor);
       });
       return committed ?? rejected ?? { ok: false, reason: "Unknown failure" };
     },

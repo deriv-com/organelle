@@ -342,10 +342,28 @@ export function SandboxHistory({ treeId }: { treeId: string }) {
   const requestFocus = useOrgData((state) => state.requestFocus);
   const [entries, setEntries] = useState<HistoryRow[] | null>(null);
   const [failed, setFailed] = useState(false);
+  const allowed = useOrgData((state) => state.sandboxCanReadHistory);
+  const [query, setQuery] = useState("");
+  const [selectedAction, setSelectedAction] = useState("all");
+  const [selectedActor, setSelectedActor] = useState("all");
+  useEffect(() => {
+    setQuery("");
+    setSelectedAction("all");
+    setSelectedActor("all");
+  }, [treeId]);
 
-  useEffect(() => () => closeSandboxHistorySheet(), []);
+  useEffect(
+    () => () => {
+      if (useOrgData.getState().historyOpen) closeSandboxHistorySheet();
+    },
+    [],
+  );
 
   useEffect(() => {
+    if (!allowed) {
+      setEntries(null);
+      return;
+    }
     if (!open) return;
     let cancelled = false;
     setFailed(false);
@@ -360,12 +378,50 @@ export function SandboxHistory({ treeId }: { treeId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [open, treeId]);
+  }, [open, treeId, allowed]);
 
+  const blocks = useMemo(
+    () => (entries ? historyBlocks(entries, chartRows) : []),
+    [entries, chartRows],
+  );
+  const actions = [...new Set(blocks.map((block) => actionHeader(block).label))].sort();
+  const actors = new Map(
+    blocks.map((block) => [
+      block.actorAuthId ?? "unknown",
+      block.actorName?.trim() || "Unknown",
+    ]),
+  );
   const groups = useMemo(() => {
-    if (!entries) return [];
-    return groupByDay(historyBlocks(entries, chartRows));
-  }, [entries, chartRows]);
+    const text = query.trim().toLowerCase();
+    return groupByDay(
+      blocks.filter((block) => {
+        if (selectedAction !== "all" && actionHeader(block).label !== selectedAction)
+          return false;
+        if (
+          selectedActor !== "all" &&
+          (block.actorAuthId ?? "unknown") !== selectedActor
+        )
+          return false;
+        const chips = [
+          ...block.subject,
+          ...block.details.flatMap((d) => [...d.chips, ...(d.afterChips ?? [])]),
+        ];
+        const haystack = [
+          actionHeader(block).label,
+          sentenceTitlePrefix(block),
+          block.action,
+          block.kind,
+          block.actorName,
+          ...chips.map((c) => c.name),
+          ...block.details.flatMap((d) => [d.label, d.text, ...(d.tags ?? [])]),
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        return !text || haystack.includes(text);
+      }),
+    );
+  }, [blocks, query, selectedAction, selectedActor]);
   const deptColors = useMemo(
     () =>
       chartRows.length === 0
@@ -375,13 +431,57 @@ export function SandboxHistory({ treeId }: { treeId: string }) {
   );
 
   return (
-    <Sheet open={open} onOpenChange={setOpen}>
+    <Sheet open={open && allowed} onOpenChange={setOpen}>
       <SheetContent side="right" className="flex flex-col gap-0 p-0 sm:max-w-md">
         <SheetHeader className="border-b border-border/70 p-5">
           <SheetTitle className="text-base font-semibold">Sandbox changes</SheetTitle>
           <SheetDescription className="text-xs text-muted-foreground">
             Every change in this sandbox, newest first.
           </SheetDescription>
+          <input
+            type="search"
+            aria-label="Search changes"
+            placeholder="Search changes…"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            className="mt-3 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+          />
+          <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <label className="min-w-0 text-xs">
+              Action
+              <select
+                aria-label="Action"
+                value={selectedAction}
+                onChange={(event) => setSelectedAction(event.target.value)}
+                className="mt-1 w-full rounded-md border border-input bg-background p-2 text-sm"
+              >
+                <option value="all">All actions</option>
+                {actions.map((action) => (
+                  <option key={action} value={action}>
+                    {action}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="min-w-0 text-xs">
+              Performed by
+              <select
+                aria-label="Performed by"
+                value={selectedActor}
+                onChange={(event) => setSelectedActor(event.target.value)}
+                className="mt-1 w-full rounded-md border border-input bg-background p-2 text-sm"
+              >
+                <option value="all">Everyone</option>
+                {[...actors]
+                  .sort((a, b) => a[1].localeCompare(b[1]))
+                  .map(([id, name]) => (
+                    <option key={id} value={id}>
+                      {name}
+                    </option>
+                  ))}
+              </select>
+            </label>
+          </div>
         </SheetHeader>
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-4">
           <DeptColors.Provider value={deptColors}>
@@ -391,6 +491,8 @@ export function SandboxHistory({ treeId }: { treeId: string }) {
               <p className="m-auto text-sm text-muted-foreground">Loading…</p>
             ) : entries.length === 0 ? (
               <p className="text-sm text-muted-foreground">No changes yet.</p>
+            ) : groups.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No matching changes.</p>
             ) : (
               <div className="flex flex-col gap-6">
                 {groups.map((group) => (

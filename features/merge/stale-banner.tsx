@@ -22,11 +22,13 @@ export function StaleBanner({
   sandboxTreeId,
   forkedFromSeq,
   liveSeq,
+  canRefork,
   className,
 }: {
   sandboxTreeId: string;
   forkedFromSeq: number;
   liveSeq: number;
+  canRefork: boolean;
   className?: string;
 }) {
   const router = useRouter();
@@ -53,33 +55,35 @@ export function StaleBanner({
     <>
       <div
         className={cn(
-          "pointer-events-auto flex max-w-[min(100vw-2rem,36rem)] flex-wrap items-center gap-2 rounded-xl border border-amber-400/80 bg-background/95 px-3 py-2 shadow-sm backdrop-blur-sm",
+          "pointer-events-auto flex min-w-0 max-w-full flex-wrap items-center gap-2 rounded-xl border border-amber-400/80 bg-background/95 px-3 py-2 shadow-sm backdrop-blur-sm",
           className,
         )}
       >
-        <p className="text-xs font-medium text-foreground">
+        <p className="min-w-0 text-xs font-medium text-foreground">
           Based on v{forkedFromSeq}. Live is now v{liveSeq}
         </p>
         <span className="hidden text-xs text-muted-foreground sm:inline">
           · {behind} merge{behind === 1 ? "" : "s"} since
         </span>
         <div className="ml-auto flex flex-wrap items-center gap-1.5">
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={busy}
-            className="h-7 rounded-lg border-border/80 bg-background px-2.5 text-xs shadow-xs"
-            onClick={() => setConfirm(true)}
-          >
-            Re-fork
-          </Button>
+          {canRefork && (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={busy}
+              className="h-7 rounded-lg border-border/80 bg-background px-2.5 text-xs shadow-xs"
+              onClick={() => setConfirm(true)}
+            >
+              Re-fork
+            </Button>
+          )}
           <Button asChild size="sm" className="h-7 rounded-lg px-2.5 text-xs">
             <Link href={`/sandbox/${sandboxTreeId}/sync`}>Sync from live</Link>
           </Button>
         </div>
         {error ? <p className="w-full text-xs text-destructive">{error}</p> : null}
       </div>
-      <AlertDialog open={confirm} onOpenChange={setConfirm}>
+      <AlertDialog open={canRefork && confirm} onOpenChange={setConfirm}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Re-fork this sandbox?</AlertDialogTitle>

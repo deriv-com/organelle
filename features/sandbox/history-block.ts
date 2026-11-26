@@ -13,6 +13,7 @@ export type HistoryRow = {
   employee_name?: string | null;
   employee_avatar_url?: string | null;
   actor_name?: string | null;
+  actor_auth_id?: string | null;
   before: Record<string, unknown> | null;
   after: Record<string, unknown> | null;
   created_at: string;
@@ -66,6 +67,7 @@ export type HistoryBlock = {
   kind: string;
   action: string;
   actorName: string | null;
+  actorAuthId?: string | null;
   focusNodeId: string | null;
   subject: Chip[];
   details: HistoryDetail[];
@@ -296,6 +298,7 @@ export function historyBlock(entry: HistoryRow, rows: ChartRow[]): HistoryBlock 
     kind,
     action: kind,
     actorName: entry.actor_name ?? null,
+    actorAuthId: entry.actor_auth_id ?? null,
     focusNodeId: entry.node_id,
     subject: [],
     details: [],
@@ -657,6 +660,7 @@ export function historyBlocks(entries: HistoryRow[], rows: ChartRow[]): HistoryB
       ...block,
       id,
       actorName: head.actor_name ?? block.actorName,
+      actorAuthId: head.actor_auth_id ?? block.actorAuthId,
     };
     if (kind === "undo") return { ...withCommandActor, kind: "Undid" };
     if (kind === "redo") return { ...withCommandActor, kind: "Redid" };

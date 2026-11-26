@@ -42,6 +42,7 @@ interface OrgDataState {
   undoGen: number;
   redoGen: number;
   setHistoryOpen: (open: boolean) => void;
+  setSandboxCanReadHistory: (allowed: boolean) => void;
   requestFocus: (nodeId: string) => void;
   clearFocusRequest: () => void;
   setMergeChrome: (
@@ -110,6 +111,11 @@ export const useOrgData = create<OrgDataState>((set) => ({
   undoGen: 0,
   redoGen: 0,
   setHistoryOpen: (open) => set({ historyOpen: open }),
+  setSandboxCanReadHistory: (allowed) =>
+    set({
+      sandboxCanReadHistory: allowed,
+      ...(!allowed ? { historyOpen: false } : {}),
+    }),
   requestFocus: (nodeId) =>
     set((state) => ({
       focusRequest: { nodeId, gen: (state.focusRequest?.gen ?? 0) + 1 },

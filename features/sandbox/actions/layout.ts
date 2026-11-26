@@ -128,7 +128,7 @@ export async function setAssistant(args: {
           }
         }
         if (Boolean(node.is_assistant) === isAssistant) {
-          committed = await ackTouched(tx, treeId, [nodeId], null);
+          committed = await ackTouched(tx, treeId, [nodeId], null, actor);
           return;
         }
         await tx`
@@ -145,7 +145,7 @@ export async function setAssistant(args: {
           command,
         });
         await tx`select organelle.validate_tree(${treeId})`;
-        committed = await ackTouched(tx, treeId, [nodeId], command.commandId);
+        committed = await ackTouched(tx, treeId, [nodeId], command.commandId, actor);
       });
       return committed ?? rejected ?? { ok: false, reason: "Unknown failure" };
     },
@@ -266,7 +266,7 @@ export async function setLeafGridColumns(args: {
           return;
         }
         if (Number(node.leaf_grid_columns) === columns) {
-          committed = await ackTouched(tx, treeId, [nodeId], null);
+          committed = await ackTouched(tx, treeId, [nodeId], null, actor);
           return;
         }
         await tx`
@@ -283,7 +283,7 @@ export async function setLeafGridColumns(args: {
           command,
         });
         await tx`select organelle.validate_tree(${treeId})`;
-        committed = await ackTouched(tx, treeId, [nodeId], command.commandId);
+        committed = await ackTouched(tx, treeId, [nodeId], command.commandId, actor);
       });
       return committed ?? rejected ?? { ok: false, reason: "Unknown failure" };
     },

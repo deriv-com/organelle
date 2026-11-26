@@ -117,3 +117,21 @@ describe("buildDirectoryRows", () => {
     ]);
   });
 });
+
+describe("shared-seat manager identity", () => {
+  it("uses the selected reporting manager when the manager seat has peers", () => {
+    const rows = [
+      header("root", "", "Example Organization"),
+      seat("managers", "root", [
+        member("manager-a", "Manager A"),
+        member("manager-b", "Manager B", { isHost: false }),
+      ]),
+      seat("report", "managers", [
+        member("person", "Example Person", { primaryManagerAuthId: "manager-b" }),
+      ]),
+    ];
+    expect(
+      buildDirectoryRows(rows).find((row) => row.nodeId === "report")?.manager,
+    ).toBe("Manager B");
+  });
+});
